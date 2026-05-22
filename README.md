@@ -6,9 +6,10 @@ running them on the real hardware.
 
 ```
 .
-├── LiDAR Sim/   — Grade-aware LiDAR perception + navigation
-├── GPS Sim/     — GPS waypoint navigation without a magnetometer
-└── GUI Sim/     — Real HUD running against synthetic ROS topics
+├── LiDAR Sim/       — Grade-aware LiDAR perception + navigation
+├── LiDAR Line Sim/  — RSSI white-tape line detection + avoidance
+├── GPS Sim/         — GPS waypoint navigation without a magnetometer
+└── GUI Sim/         — Real HUD running against synthetic ROS topics
 ```
 
 Each sim is self-contained: its own Python sources under `simulated_world/`,
@@ -31,6 +32,18 @@ Drops one or many agents onto a 3D STL terrain and navigates with a
 The contract the perception layer must obey lives in
 [`LiDAR Sim/RULES.md`](LiDAR%20Sim/RULES.md). The terrain-grade-layer design
 notes are in `LiDAR Sim/terrain-grade-layer-plan.md`.
+
+### LiDAR Line Sim — `LiDAR Line Sim/`
+Standalone RSSI-based white-tape detector and avoidance simulator. It does
+not depend on the PCA/terrain sim. The sim generates layered SICK
+multiScan-style ground returns, models white duct tape RSSI on grey rubber
+flooring, extracts line clusters using point cloud fields only, builds a line
+costmap, and plans around the detected line cells.
+
+Run `lidar_line_sim.py` for the interactive view or
+`lidar_line_sim.py --benchmark --rays 11520` for the pass/fail detector and
+planner benchmark. Use `lidar_line_sim.py --robot-benchmark --rays 11520` to
+run the same benchmark with the robot repo's `lidar_line_detector.yaml`.
 
 ### GPS Sim — `GPS Sim/`
 A GPS-without-magnetometer waypoint simulator. The robot has no compass, so
@@ -103,6 +116,9 @@ That's it — the launchers find Python via `.venv/bin/python` (Unix) or
 |-----------|---------------------------------------------|------------------------------------------|----------------------------------------|
 | LiDAR     | `LiDAR Sim/Run_LIDAR_SIM.command`           | `LiDAR Sim\Run_LIDAR_SIM.bat`            | `launcher.py` → `lidar_sim_gui.py`     |
 | LiDAR (skip launcher) | `LiDAR Sim/Run_LIDAR_SIM_direct.command` | `LiDAR Sim\Run_LIDAR_SIM_direct.bat` | `lidar_sim_gui.py`                  |
+| LiDAR Line | `LiDAR Line Sim/Run_LIDAR_LINE_SIM.command` | `LiDAR Line Sim\Run_LIDAR_LINE_SIM.bat` | `lidar_line_sim.py`                 |
+| LiDAR Line benchmark | `LiDAR Line Sim/Run_LIDAR_LINE_BENCHMARK.command` | `LiDAR Line Sim\Run_LIDAR_LINE_BENCHMARK.bat` | `lidar_line_sim.py --benchmark` |
+| Robot LiDAR Line benchmark | `LiDAR Line Sim/Run_ROBOT_LIDAR_LINE_BENCHMARK.command` | `LiDAR Line Sim\Run_ROBOT_LIDAR_LINE_BENCHMARK.bat` | `lidar_line_sim.py --robot-benchmark` |
 | GPS       | `GPS Sim/Run_GPS_SIM.command`               | `GPS Sim\Run_GPS_SIM.bat`                | `launcher.py` → `gps_sim_gui.py`       |
 | GPS (skip launcher)   | `GPS Sim/Run_GPS_SIM_direct.command`     | `GPS Sim\Run_GPS_SIM_direct.bat`     | `gps_sim_gui.py`                       |
 | GUI       | `GUI Sim/Run_GUI.command`                   | `GUI Sim\Run_GUI.bat`                    | `runner.py`                            |
