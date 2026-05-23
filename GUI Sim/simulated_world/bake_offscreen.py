@@ -844,7 +844,7 @@ def compose_frame(cam_img, lidar_img, gps_img, odom_img, pwr_imgs, data,
     y += 6
     _text(canvas, 'Virtual Devices', (14, y + 16), DIM_TEXT, 0.5)
     y += 26
-    for name in ['SLAM', 'CONTROL', 'NAV2', 'LINE DETECT']:
+    for name in ['SLAM', 'CONTROL', 'NAV2', 'CAMERA LINE DETECT']:
         _status_dot(canvas, 14, y, False, name)
         y += 28
     y += 6
