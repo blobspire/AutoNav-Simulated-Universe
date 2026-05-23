@@ -1,13 +1,14 @@
 # LiDAR Line Sim
 
-Standalone RSSI line-detection simulator for the white-tape boundary system.
-This is separate from the PCA terrain/grade LiDAR sim. The default RSSI model
-matches the current lab setup: white duct tape strips on grey rubber flooring.
+Standalone reflector/RSSI line-detection simulator for the tape boundary
+system. This is separate from the PCA terrain/grade LiDAR sim. The default
+return model matches the current robot setup: retroreflective tape strips on
+grey rubber flooring.
 
 The sim models a flat competition-style field, SICK multiScan-like layered
-ground returns, moderate RSSI lift from white duct tape, adaptive line
-extraction, a line avoidance costmap, and A* path planning around detected
-line cells.
+ground returns, SICK-style reflector hits from retroreflective tape, optional
+adaptive RSSI fallback extraction, a line avoidance costmap, and A* path
+planning around detected line cells.
 
 ## Run
 
@@ -56,23 +57,23 @@ precision, timing, and whether the planned path stays clear of tape.
 ## Robot Config Mode
 
 `--robot-config` loads the real ROS 2 `lidar_line_detector.yaml` and applies
-those detector gates, adaptive RSSI thresholds, cluster filters, voxel output
-size, and max output point count in the sim. `--robot-benchmark` is shorthand
-for `--benchmark --robot-config auto`, where `auto` searches the common local
-AutoNav checkout paths under `~/code/git`.
+the candidate mode, reflector gate, fallback adaptive RSSI thresholds, cluster
+filters, voxel output size, and max output point count in the sim.
+`--robot-benchmark` is shorthand for `--benchmark --robot-config auto`, where
+`auto` searches the common local AutoNav checkout paths under `~/code/git`.
 
 The robot node gates ground points in `base_link`, while this sim generates
 points in the LiDAR sensor frame. Robot config mode applies the equivalent
 z-offset before the ground gate so the sim exercises the same configured
 `ground_z_m` and `ground_z_tolerance_m` values.
 
-## Lab RSSI Model
+## Lab Reflector Model
 
-The built-in RSSI profile assumes grey rubber floor returns near the low 30s
-at short range, attenuating with range and layer angle. White duct tape adds a
-moderate RSSI boost into roughly the 70-90 range for the usual lab distances.
-The sim intentionally does not mark duct tape as a reflector by default; the
-robot config must detect it from intensity contrast.
+The built-in return profile assumes grey rubber floor RSSI near the low 30s
+at short range, attenuating with range and layer angle. Retroreflective tape
+sets `reflector=True` and adds a high RSSI return for visualization and
+fallback experiments. The default detector uses `candidate_mode: reflector`;
+the adaptive RSSI values remain available for non-reflective tape testing.
 
 If measured SICK RSSI values differ in the lab, tune the constants near the
 top of `lidar_line_sim.py` and rerun:

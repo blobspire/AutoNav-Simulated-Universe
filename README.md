@@ -7,7 +7,7 @@ running them on the real hardware.
 ```
 .
 ├── LiDAR Sim/       — Grade-aware LiDAR perception + navigation
-├── LiDAR Line Sim/  — RSSI white-tape line detection + avoidance
+├── LiDAR Line Sim/  — Reflector tape line detection + avoidance
 ├── GPS Sim/         — GPS waypoint navigation without a magnetometer
 └── GUI Sim/         — Real HUD running against synthetic ROS topics
 ```
@@ -34,11 +34,13 @@ The contract the perception layer must obey lives in
 notes are in `LiDAR Sim/terrain-grade-layer-plan.md`.
 
 ### LiDAR Line Sim — `LiDAR Line Sim/`
-Standalone RSSI-based white-tape detector and avoidance simulator. It does
+Standalone retroreflective tape detector and avoidance simulator. It does
 not depend on the PCA/terrain sim. The sim generates layered SICK
-multiScan-style ground returns, models white duct tape RSSI on grey rubber
-flooring, extracts line clusters using point cloud fields only, builds a line
-costmap, and plans around the detected line cells.
+multiScan-style ground returns, marks retroreflective tape with the same
+`reflector` point-cloud field used by the SICK driver, extracts line clusters
+using point cloud fields only, builds a line costmap, and plans around the
+detected line cells. RSSI is still modeled for visualization and intensity
+fallback experiments.
 
 Run `lidar_line_sim.py` for the interactive view or
 `lidar_line_sim.py --benchmark --rays 11520` for the pass/fail detector and

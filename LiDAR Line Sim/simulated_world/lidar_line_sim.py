@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Standalone LiDAR RSSI line-detection simulator.
+"""Standalone LiDAR reflector/RSSI line-detection simulator.
 
 This sim intentionally does not import or reuse the terrain/PCA LiDAR sim.
-It models the narrow perception loop needed for white-tape line detection:
+It models the narrow perception loop needed for retroreflective tape line
+detection:
 
 1. Generate layered SICK multiScan-style rays against a flat field.
-2. Encode white tape as high RSSI returns in the simulated point cloud.
+2. Encode retroreflective tape with the SICK-style reflector bit and high RSSI.
 3. Detect tape using only point cloud fields: xyz, range, layer, echo,
    reflector and intensity.
 4. Convert accepted line clusters into an avoidance costmap and plan a path.
@@ -41,17 +42,16 @@ GRID_RES_M = 0.08
 ROBOT_RADIUS_M = 0.32
 LINE_INFLATION_M = 0.50
 
-# Lab RSSI model: white duct tape on grey rubber flooring. These are
-# deliberately moderate RSSI values so robot tests do not depend on a
-# retroreflective-tape response.
+# Lab return model: retroreflective tape on grey rubber flooring. The SICK
+# driver exposes retroreflective hits through the PointCloud2 "reflector" bit;
+# RSSI is still modeled for visualization and fallback experiments.
 GREY_RUBBER_RSSI_BASE = 34.0
 GREY_RUBBER_RSSI_RANGE_LOSS_PER_M = 1.25
 GREY_RUBBER_RSSI_LAYER_BIAS = 0.35
 GREY_RUBBER_RSSI_NOISE = 3.2
-WHITE_DUCT_TAPE_RSSI_BOOST = 48.0
-WHITE_DUCT_TAPE_RSSI_RANGE_LOSS_LOG = 1.5
-WHITE_DUCT_TAPE_EDGE_BOOST = 7.0
-WHITE_DUCT_TAPE_REFLECTOR_THRESHOLD = 130.0
+RETRO_TAPE_RSSI_BOOST = 175.0
+RETRO_TAPE_RSSI_RANGE_LOSS_LOG = 1.5
+RETRO_TAPE_EDGE_BOOST = 10.0
 
 
 @dataclass(frozen=True)
@@ -100,13 +100,14 @@ class DetectorParams:
     layer_min: int = -1
     layer_max: int = -1
     echo_filter: int = -1
+    candidate_mode: str = "reflector"
     adaptive_range_bin_m: float = 0.50
     adaptive_stddev_multiplier: float = 1.55
     adaptive_min_delta: float = 7.0
     adaptive_min_samples: int = 16
     min_intensity: float = 42.0
     normalize_by_layer: bool = True
-    use_reflector_boost: bool = True
+    use_reflector_boost: bool = False
     reflector_threshold_boost: float = 18.0
     cluster_link_distance_m: float = 0.30
     cluster_min_points: int = 4
@@ -175,7 +176,7 @@ class GridSpec:
 
 
 def default_world() -> World:
-    """Competition-like white tape: side bounds and two keep-out line runs."""
+    """Competition-like retroreflective tape bounds and keep-out line runs."""
 
     segments = (
         TapeSegment(np.array([-2.05, -5.85]), np.array([-2.05, 5.85])),
@@ -423,16 +424,16 @@ def simulate_scan(world: World,
                                 seed=seed)
     tape_boost = np.where(
         on_tape,
-        WHITE_DUCT_TAPE_RSSI_BOOST
-        - WHITE_DUCT_TAPE_RSSI_RANGE_LOSS_LOG * np.log1p(ranges),
+        RETRO_TAPE_RSSI_BOOST
+        - RETRO_TAPE_RSSI_RANGE_LOSS_LOG * np.log1p(ranges),
         0.0,
     )
     shoulder = np.clip(1.0 - (tape_dist - tape_width * 0.5) / 0.10, 0.0, 1.0)
-    edge_boost = np.where(~on_tape, WHITE_DUCT_TAPE_EDGE_BOOST * shoulder, 0.0)
+    edge_boost = np.where(~on_tape, RETRO_TAPE_EDGE_BOOST * shoulder, 0.0)
     intensity = np.clip(base + noise + tape_boost + edge_boost, 0.0, 255.0)
 
     echo = np.zeros((points_local.shape[0],), dtype=np.int8)
-    reflector = intensity >= WHITE_DUCT_TAPE_REFLECTOR_THRESHOLD
+    reflector = on_tape.copy()
     return LidarScan(
         points_local=points_local.astype(np.float32),
         points_world=points_world.astype(np.float32),
@@ -495,6 +496,15 @@ def _adaptive_intensity_candidates(scan: LidarScan,
         candidate[idx] = scan.intensity[idx] >= local_thresholds
 
     return candidate
+
+
+def _normalize_candidate_mode(mode: str) -> str:
+    normalized = str(mode).strip().lower()
+    if normalized == "combined":
+        normalized = "reflector_or_intensity"
+    if normalized in ("reflector", "intensity", "reflector_or_intensity"):
+        return normalized
+    return "intensity"
 
 
 def _cluster_points(points_xy: np.ndarray, eps: float) -> list[np.ndarray]:
@@ -605,7 +615,16 @@ def detect_lidar_lines(scan: LidarScan,
         & echo_ok
     )
 
-    candidate_mask = _adaptive_intensity_candidates(scan, ground_mask, params)
+    intensity_candidate_mask = _adaptive_intensity_candidates(
+        scan, ground_mask, params)
+    reflector_candidate_mask = ground_mask & scan.reflector
+    candidate_mode = _normalize_candidate_mode(params.candidate_mode)
+    if candidate_mode == "reflector":
+        candidate_mask = reflector_candidate_mask
+    elif candidate_mode == "reflector_or_intensity":
+        candidate_mask = reflector_candidate_mask | intensity_candidate_mask
+    else:
+        candidate_mask = intensity_candidate_mask
     candidate_idx = np.flatnonzero(candidate_mask)
     candidate_xy = base[candidate_idx, :2]
     clusters = _cluster_points(candidate_xy, params.cluster_link_distance_m)
