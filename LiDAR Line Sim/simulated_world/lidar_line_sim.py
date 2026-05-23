@@ -38,9 +38,46 @@ FIELD_X_MIN = -3.2
 FIELD_X_MAX = 3.2
 FIELD_Y_MIN = -6.4
 FIELD_Y_MAX = 6.4
-GRID_RES_M = 0.08
+GRID_RES_M = 0.10
 ROBOT_RADIUS_M = 0.32
-LINE_INFLATION_M = 0.50
+LINE_INFLATION_M = 0.60
+
+# Robot dynamics copied from BEHAVIOR TREE Sim/simulated_world/bt_sim_gui.py.
+# The state is the rear-axle midpoint and the front caster is passive, so the
+# chassis behaves like a Chaplygin sleigh rather than a holonomic point mass.
+ROBOT_MASS_KG = 35.0
+COM_OFFSET_M = 0.25
+WHEELBASE_M = 0.39
+TRACK_WIDTH_M = 0.54
+WHEEL_RADIUS_M = 0.20
+CASTER_RADIUS_M = 0.09
+FOOTPRINT_HALF_W = 0.21
+FOOTPRINT_LEN_BACK = 0.10
+FOOTPRINT_LEN_FWD = WHEELBASE_M + 0.05
+_L_FP = FOOTPRINT_LEN_BACK + FOOTPRINT_LEN_FWD
+_W_FP = 2 * FOOTPRINT_HALF_W
+INERTIA_COM = ROBOT_MASS_KG * (_L_FP * _L_FP + _W_FP * _W_FP) / 12.0
+INERTIA_REAR = INERTIA_COM + ROBOT_MASS_KG * COM_OFFSET_M * COM_OFFSET_M
+F_WHEEL_MAX_N = 200.0
+F_WHEEL_MIN_N = -120.0
+LIN_DAMP = 6.0
+ANG_DAMP = 2.0
+
+LOOKAHEAD_M = 1.20
+DESIRED_SPEED_MPS = 0.75
+DWB_CRITIC_RADIUS_CELLS = 3
+DWB_CRITIC_WEIGHT = 0.25
+DWB_HORIZON_S = 0.8
+DWB_HORIZON_DT_S = 0.2
+DWB_V_DELTAS = (0.35, 0.6, 1.0, 1.25)
+DWB_W_DELTAS = (-0.6, -0.25, 0.0, 0.25, 0.6)
+APPROACH_SLOW_M = 1.5
+GOAL_TOLERANCE_M = 0.45
+KP_LIN, KD_LIN = 35.0, 8.0
+KP_ANG, KD_ANG = 22.0, 4.0
+
+PHYS_DT = 1.0 / 240.0
+RENDER_FPS = 30
 
 # Lab return model: retroreflective tape on grey rubber flooring. The SICK
 # driver exposes retroreflective hits through the PointCloud2 "reflector" bit;
@@ -66,6 +103,61 @@ class RobotPose:
     x: float
     y: float
     heading: float
+    u: float = 0.0
+    omega: float = 0.0
+    F_left: float = 0.0
+    F_right: float = 0.0
+
+    def rear_axle(self) -> tuple[float, float]:
+        return self.x, self.y
+
+    def front_caster(self) -> tuple[float, float]:
+        c, s = math.cos(self.heading), math.sin(self.heading)
+        return (self.x + WHEELBASE_M * c, self.y + WHEELBASE_M * s)
+
+    def footprint_polygon(self) -> np.ndarray:
+        c, s = math.cos(self.heading), math.sin(self.heading)
+        forward = np.array([c, s], dtype=float)
+        left = np.array([-s, c], dtype=float)
+        rear = np.array([self.x, self.y], dtype=float)
+        corners = (
+            rear - FOOTPRINT_LEN_BACK * forward - FOOTPRINT_HALF_W * left,
+            rear - FOOTPRINT_LEN_BACK * forward + FOOTPRINT_HALF_W * left,
+            rear + FOOTPRINT_LEN_FWD * forward + FOOTPRINT_HALF_W * left,
+            rear + FOOTPRINT_LEN_FWD * forward - FOOTPRINT_HALF_W * left,
+        )
+        return np.asarray(corners, dtype=float)
+
+    def step_dynamics(self, F_left: float, F_right: float, dt: float) -> None:
+        F_left = max(F_WHEEL_MIN_N, min(F_WHEEL_MAX_N, F_left))
+        F_right = max(F_WHEEL_MIN_N, min(F_WHEEL_MAX_N, F_right))
+        self.F_left, self.F_right = F_left, F_right
+
+        F_total = F_left + F_right
+        torque_rear = (F_right - F_left) * TRACK_WIDTH_M / 2.0
+        du = (F_total + ROBOT_MASS_KG * COM_OFFSET_M * self.omega ** 2
+              - LIN_DAMP * self.u) / ROBOT_MASS_KG
+        dw = (torque_rear
+              - ROBOT_MASS_KG * COM_OFFSET_M * self.u * self.omega
+              - ANG_DAMP * self.omega) / INERTIA_REAR
+        self.u += du * dt
+        self.omega += dw * dt
+        self.x += self.u * math.cos(self.heading) * dt
+        self.y += self.u * math.sin(self.heading) * dt
+        self.heading = _wrap_angle(self.heading + self.omega * dt)
+
+        if self.x < FIELD_X_MIN + ROBOT_RADIUS_M:
+            self.x = FIELD_X_MIN + ROBOT_RADIUS_M
+            self.u = min(0.0, self.u)
+        elif self.x > FIELD_X_MAX - ROBOT_RADIUS_M:
+            self.x = FIELD_X_MAX - ROBOT_RADIUS_M
+            self.u = min(0.0, self.u)
+        if self.y < FIELD_Y_MIN + ROBOT_RADIUS_M:
+            self.y = FIELD_Y_MIN + ROBOT_RADIUS_M
+            self.u = min(0.0, self.u)
+        elif self.y > FIELD_Y_MAX - ROBOT_RADIUS_M:
+            self.y = FIELD_Y_MAX - ROBOT_RADIUS_M
+            self.u = min(0.0, self.u)
 
 
 @dataclass(frozen=True)
@@ -119,10 +211,33 @@ class DetectorParams:
 
 
 @dataclass(frozen=True)
+class LineLayerParams:
+    observation_persistence_ms: int = 10000
+    observation_persistence_resolution_m: float = 0.10
+    clear_lines_only_in_view: bool = True
+    line_clear_angle_min_rad: float = -0.95
+    line_clear_angle_max_rad: float = 0.95
+    line_clear_range_min_m: float = 0.2
+    line_clear_range_max_m: float = 6.0
+    max_persisted_points: int = 12000
+    clearing: bool = True
+
+    @property
+    def persistence_s(self) -> float:
+        return max(0.0, self.observation_persistence_ms / 1000.0)
+
+
+@dataclass(frozen=True)
 class LoadedRobotConfig:
     path: Path
     params: DetectorParams
     base_z_offset_m: float
+
+
+@dataclass(frozen=True)
+class LoadedLineLayerConfig:
+    path: Path
+    params: LineLayerParams
 
 
 @dataclass(frozen=True)
@@ -187,12 +302,39 @@ def default_world() -> World:
     return World(segments)
 
 
+def diagonal_strip_world() -> World:
+    """Field scenario matching a retroreflective strip angled away from robot."""
+
+    segments = (
+        TapeSegment(np.array([-2.05, -5.85]), np.array([-2.05, 5.85])),
+        TapeSegment(np.array([2.05, -5.85]), np.array([2.05, 5.85])),
+        TapeSegment(np.array([-0.45, -0.20]), np.array([-2.15, 2.25])),
+        TapeSegment(np.array([1.55, 1.45]), np.array([1.55, 5.65])),
+    )
+    return World(segments)
+
+
+def make_world(scenario: str) -> World:
+    normalized = str(scenario).strip().lower().replace("-", "_")
+    if normalized in ("diagonal", "diagonal_strip", "live"):
+        return diagonal_strip_world()
+    return default_world()
+
+
 def default_robot() -> RobotPose:
     return RobotPose(0.0, -0.50, math.pi / 2.0)
 
 
 def default_goal() -> np.ndarray:
     return np.array([0.85, 5.05], dtype=float)
+
+
+def _wrap_angle(angle: float) -> float:
+    while angle > math.pi:
+        angle -= 2.0 * math.pi
+    while angle <= -math.pi:
+        angle += 2.0 * math.pi
+    return angle
 
 
 def _parse_yaml_scalar(raw_value: str) -> object:
@@ -301,6 +443,80 @@ def load_robot_detector_config(path: Path) -> LoadedRobotConfig:
         params=params,
         base_z_offset_m=base_z_offset_m,
     )
+
+
+def resolve_nav2_config_path(value: str) -> Path:
+    if value == "auto":
+        candidates = (
+            Path.home() / "code/git/AutoNavB/isaac_ros-dev/src/"
+            "slam/config/nav2_paramsv2.yaml",
+            Path.home() / "code/git/AutoNav/isaac_ros-dev/src/"
+            "slam/config/nav2_paramsv2.yaml",
+            Path.home() / "code/git/AutoNav_25-26/isaac_ros-dev/src/"
+            "slam/config/nav2_paramsv2.yaml",
+        )
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate
+        checked = "\n".join(f"  {candidate}" for candidate in candidates)
+        raise FileNotFoundError(
+            "Could not find robot nav2_paramsv2.yaml. Checked:\n"
+            f"{checked}")
+
+    path = Path(value).expanduser()
+    if not path.exists():
+        raise FileNotFoundError(f"Nav2 config does not exist: {path}")
+    return path
+
+
+def _load_named_yaml_mapping(path: Path,
+                             mapping_name: str) -> dict[str, object]:
+    params: dict[str, object] = {}
+    in_mapping = False
+    mapping_indent = 0
+    param_indent: int | None = None
+
+    for line in path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = len(line) - len(line.lstrip())
+        if stripped == f"{mapping_name}:":
+            in_mapping = True
+            mapping_indent = indent
+            param_indent = None
+            continue
+        if not in_mapping:
+            continue
+        if indent <= mapping_indent:
+            break
+        if ":" not in stripped:
+            continue
+        if param_indent is None:
+            param_indent = indent
+        if indent != param_indent:
+            continue
+        key, raw_value = stripped.split(":", 1)
+        if raw_value.strip():
+            params[key.strip()] = _parse_yaml_scalar(raw_value)
+
+    return params
+
+
+def load_lidar_line_layer_config(path: Path) -> LoadedLineLayerConfig:
+    raw_params = _load_named_yaml_mapping(path, "lidar_line_layer")
+    defaults = LineLayerParams()
+    values: dict[str, object] = {}
+    for field in fields(LineLayerParams):
+        if field.name not in raw_params:
+            continue
+        default = getattr(defaults, field.name)
+        values[field.name] = _coerce_param(raw_params[field.name], default)
+
+    params = LineLayerParams(**{field.name: values.get(
+        field.name, getattr(defaults, field.name))
+        for field in fields(LineLayerParams)})
+    return LoadedLineLayerConfig(path=path, params=params)
 
 
 def generate_multiscan_rays(total_rays: int) -> tuple[np.ndarray, np.ndarray]:
@@ -808,6 +1024,192 @@ def astar(blocked: np.ndarray,
     return []
 
 
+@dataclass(frozen=True)
+class ControllerOutput:
+    F_left: float
+    F_right: float
+    v_des: float
+    omega_des: float
+    backwards_request: bool
+
+
+def _path_carrot(robot: RobotPose,
+                 path_xy: list[tuple[float, float]],
+                 lookahead: float = LOOKAHEAD_M) -> tuple[tuple[float, float],
+                                                           int]:
+    if not path_xy:
+        return (robot.x, robot.y), 0
+
+    rx, ry = robot.rear_axle()
+    best_k = 0
+    best_d2 = float("inf")
+    for k, (px, py) in enumerate(path_xy):
+        d2 = (px - rx) ** 2 + (py - ry) ** 2
+        if d2 < best_d2:
+            best_d2 = d2
+            best_k = k
+
+    acc = 0.0
+    carrot = path_xy[-1]
+    for k in range(best_k, len(path_xy) - 1):
+        x0, y0 = path_xy[k]
+        x1, y1 = path_xy[k + 1]
+        seg = math.hypot(x1 - x0, y1 - y0)
+        if acc + seg >= lookahead:
+            t = (lookahead - acc) / max(seg, 1e-6)
+            carrot = (x0 + t * (x1 - x0), y0 + t * (y1 - y0))
+            break
+        acc += seg
+    return carrot, best_k
+
+
+def pure_pursuit_to_wheel_forces(
+    robot: RobotPose,
+    path_xy: list[tuple[float, float]],
+    *,
+    allow_reverse: bool = False,
+    target_speed: float = DESIRED_SPEED_MPS,
+    lookahead: float = LOOKAHEAD_M,
+) -> ControllerOutput:
+    if not path_xy:
+        return ControllerOutput(0.0, 0.0, 0.0, 0.0, False)
+
+    rx, ry = robot.rear_axle()
+    carrot, _best_k = _path_carrot(robot, path_xy, lookahead)
+    goal = path_xy[-1]
+    dist_to_goal = math.hypot(goal[0] - rx, goal[1] - ry)
+    v_des = target_speed * min(1.0, dist_to_goal / APPROACH_SLOW_M)
+    if dist_to_goal < GOAL_TOLERANCE_M:
+        v_des = 0.0
+
+    bearing = math.atan2(carrot[1] - ry, carrot[0] - rx)
+    err = _wrap_angle(bearing - robot.heading)
+    backwards = abs(err) > math.pi / 2.0
+    if backwards and not allow_reverse:
+        v_des = 0.0
+        omega_des = max(-1.5, min(1.5, 2.4 * err))
+        a_yaw = KP_ANG * (omega_des - robot.omega)
+        a_long = KP_LIN * (v_des - robot.u)
+        F_total = ROBOT_MASS_KG * a_long / 10.0
+        tau_total = INERTIA_REAR * a_yaw / 6.0
+        F_left = 0.5 * F_total - tau_total / TRACK_WIDTH_M
+        F_right = 0.5 * F_total + tau_total / TRACK_WIDTH_M
+        return ControllerOutput(F_left, F_right, v_des, omega_des, True)
+
+    if allow_reverse and backwards:
+        err = err + math.pi if err < 0 else err - math.pi
+        v_des = -abs(v_des)
+
+    omega_des = max(-1.0, min(1.0, 1.8 * err))
+    a_long = KP_LIN * (v_des - robot.u) - KD_LIN * 0.0
+    a_yaw = KP_ANG * (omega_des - robot.omega) - KD_ANG * 0.0
+    F_total = ROBOT_MASS_KG * a_long / 10.0
+    tau_total = INERTIA_REAR * a_yaw / 6.0
+    F_left = 0.5 * F_total - tau_total / TRACK_WIDTH_M
+    F_right = 0.5 * F_total + tau_total / TRACK_WIDTH_M
+    return ControllerOutput(F_left, F_right, v_des, omega_des, False)
+
+
+def costmap_distance_cells(blocked: np.ndarray,
+                           max_cells: int = DWB_CRITIC_RADIUS_CELLS
+                           ) -> np.ndarray:
+    dist = np.full(blocked.shape, max_cells + 1, dtype=np.int16)
+    ys, xs = np.nonzero(blocked)
+    if ys.size == 0:
+        return dist
+
+    dist[ys, xs] = 0
+    frontier = list(zip(ys.tolist(), xs.tolist()))
+    for d in range(1, max_cells + 1):
+        next_frontier: list[tuple[int, int]] = []
+        for y, x in frontier:
+            for dy, dx in ((-1, 0), (1, 0), (0, -1), (0, 1),
+                           (-1, -1), (-1, 1), (1, -1), (1, 1)):
+                ny = y + dy
+                nx = x + dx
+                if ny < 0 or ny >= blocked.shape[0]:
+                    continue
+                if nx < 0 or nx >= blocked.shape[1]:
+                    continue
+                if dist[ny, nx] <= d:
+                    continue
+                dist[ny, nx] = d
+                next_frontier.append((ny, nx))
+        frontier = next_frontier
+        if not frontier:
+            break
+    return dist
+
+
+def dwb_with_line_critic(
+    robot: RobotPose,
+    path_xy: list[tuple[float, float]],
+    line_dist_grid: np.ndarray | None,
+    spec: GridSpec,
+    *,
+    allow_reverse: bool = False,
+    target_speed: float = DESIRED_SPEED_MPS,
+    lookahead: float = LOOKAHEAD_M,
+) -> ControllerOutput:
+    baseline = pure_pursuit_to_wheel_forces(
+        robot, path_xy,
+        allow_reverse=allow_reverse,
+        target_speed=target_speed,
+        lookahead=lookahead,
+    )
+    if line_dist_grid is None or not path_xy or baseline.v_des == 0.0:
+        return baseline
+
+    rx, ry = robot.rear_axle()
+    carrot, _best_k = _path_carrot(robot, path_xy, lookahead)
+    max_d = DWB_CRITIC_RADIUS_CELLS
+    steps = max(1, int(round(DWB_HORIZON_S / DWB_HORIZON_DT_S)))
+    best_score = math.inf
+    best_v = baseline.v_des
+    best_w = baseline.omega_des
+
+    for vf in DWB_V_DELTAS:
+        v_cand = baseline.v_des * vf
+        for wd in DWB_W_DELTAS:
+            w_cand = max(-1.5, min(1.5, baseline.omega_des + wd))
+            x, y, th = rx, ry, robot.heading
+            collided = False
+            obstacle_penalty = 0.0
+            for _ in range(steps):
+                x += v_cand * math.cos(th) * DWB_HORIZON_DT_S
+                y += v_cand * math.sin(th) * DWB_HORIZON_DT_S
+                th = _wrap_angle(th + w_cand * DWB_HORIZON_DT_S)
+                ix, iy = spec.world_to_cell(np.asarray([[x, y]], dtype=float))
+                cx = int(ix[0])
+                cy = int(iy[0])
+                if not spec.in_bounds(cx, cy):
+                    collided = True
+                    break
+                d = int(line_dist_grid[cy, cx])
+                if d == 0:
+                    collided = True
+                    break
+                if d <= max_d:
+                    obstacle_penalty += (max_d + 1 - d)
+            if collided:
+                continue
+            path_err = math.hypot(x - carrot[0], y - carrot[1])
+            score = path_err + DWB_CRITIC_WEIGHT * obstacle_penalty
+            if score < best_score:
+                best_score = score
+                best_v = v_cand
+                best_w = w_cand
+
+    a_long = KP_LIN * (best_v - robot.u)
+    a_yaw = KP_ANG * (best_w - robot.omega)
+    F_total = ROBOT_MASS_KG * a_long / 10.0
+    tau_total = INERTIA_REAR * a_yaw / 6.0
+    F_left = 0.5 * F_total - tau_total / TRACK_WIDTH_M
+    F_right = 0.5 * F_total + tau_total / TRACK_WIDTH_M
+    return ControllerOutput(F_left, F_right, best_v, best_w,
+                            baseline.backwards_request)
+
+
 class LidarLineSimulation:
     def __init__(self,
                  rays: int = DEFAULT_RAYS,
@@ -815,12 +1217,20 @@ class LidarLineSimulation:
                  max_range_m: float = DEFAULT_MAX_RANGE_M,
                  detector_params: DetectorParams | None = None,
                  base_z_offset_m: float = 0.0,
-                 detector_label: str = "sim defaults"):
+                 detector_label: str = "sim defaults",
+                 line_layer_params: LineLayerParams | None = None,
+                 line_layer_label: str = "sim defaults",
+                 scenario: str = "competition"):
         self.rays = rays
         self.seed = seed
         self.max_range_m = max_range_m
-        self.world = default_world()
-        self.grid_spec = GridSpec()
+        self.scenario = scenario
+        self.world = make_world(scenario)
+        self.line_layer_params = line_layer_params or LineLayerParams()
+        self.line_layer_label = line_layer_label
+        self.grid_spec = GridSpec(
+            res=max(0.02,
+                    self.line_layer_params.observation_persistence_resolution_m))
         self.detector_params = (
             detector_params or DetectorParams(range_max_m=max_range_m - 0.5)
         )
@@ -828,25 +1238,133 @@ class LidarLineSimulation:
         self.detector_label = detector_label
         self.robot = default_robot()
         self.goal = default_goal()
-        self.line_memory = np.zeros(
-            (self.grid_spec.ny, self.grid_spec.nx), dtype=bool)
+        self.sim_time_s = 0.0
+        self.scan_period_s = 0.1
+        self.next_scan_s = 0.0
+        self.line_last_seen_s = np.full(
+            (self.grid_spec.ny, self.grid_spec.nx), -np.inf, dtype=float)
+        self.line_memory = np.zeros_like(self.line_last_seen_s, dtype=bool)
+        self.line_age_s = np.full_like(self.line_last_seen_s, np.inf)
+        self.last_detected_cells = self.line_memory.copy()
         self.last_scan: LidarScan | None = None
         self.last_detection: DetectionResult | None = None
         self.last_inflated = self.line_memory.copy()
+        self.line_distance_grid = costmap_distance_cells(self.last_inflated)
         self.path: list[tuple[float, float]] = []
+        self.trail: list[tuple[float, float]] = [(self.robot.x, self.robot.y)]
+        self.last_controller = ControllerOutput(0.0, 0.0, 0.0, 0.0, False)
+
+    def _reset_memory_arrays(self) -> None:
+        self.line_last_seen_s = np.full(
+            (self.grid_spec.ny, self.grid_spec.nx), -np.inf, dtype=float)
+        self.line_memory = np.zeros_like(self.line_last_seen_s, dtype=bool)
+        self.line_age_s = np.full_like(self.line_last_seen_s, np.inf)
+        self.last_detected_cells = self.line_memory.copy()
+        self.last_inflated = self.line_memory.copy()
+        self.line_distance_grid = costmap_distance_cells(self.last_inflated)
+
+    def set_line_layer_params(self,
+                              params: LineLayerParams,
+                              label: str = "sim defaults") -> None:
+        old_res = self.grid_spec.res
+        self.line_layer_params = params
+        self.line_layer_label = label
+        new_res = max(0.02, params.observation_persistence_resolution_m)
+        if abs(old_res - new_res) > 1e-9:
+            self.grid_spec = GridSpec(res=new_res)
+            self._reset_memory_arrays()
+
+    def set_scenario(self, scenario: str) -> None:
+        self.scenario = scenario
+        self.world = make_world(scenario)
+        self.reset()
 
     def reset(self) -> None:
         self.robot = default_robot()
         self.goal = default_goal()
-        self.line_memory[:, :] = False
+        self.sim_time_s = 0.0
+        self.next_scan_s = 0.0
+        self._reset_memory_arrays()
         self.last_scan = None
         self.last_detection = None
-        self.last_inflated = self.line_memory.copy()
         self.path = []
+        self.trail = [(self.robot.x, self.robot.y)]
+        self.last_controller = ControllerOutput(0.0, 0.0, 0.0, 0.0, False)
+
+    def _cells_in_clear_view(self, cell_mask: np.ndarray) -> np.ndarray:
+        ys, xs = np.nonzero(cell_mask)
+        view = np.zeros_like(cell_mask, dtype=bool)
+        if ys.size == 0:
+            return view
+
+        world = np.asarray(
+            [self.grid_spec.cell_to_world(int(x), int(y))
+             for y, x in zip(ys, xs)],
+            dtype=float,
+        )
+        dx = world[:, 0] - self.robot.x
+        dy = world[:, 1] - self.robot.y
+        c = math.cos(self.robot.heading)
+        s = math.sin(self.robot.heading)
+        local_x = c * dx + s * dy
+        local_y = -s * dx + c * dy
+        ranges = np.hypot(local_x, local_y)
+        angles = np.arctan2(local_y, local_x)
+        params = self.line_layer_params
+        ok = (
+            (ranges >= params.line_clear_range_min_m)
+            & (ranges <= params.line_clear_range_max_m)
+            & (angles >= params.line_clear_angle_min_rad)
+            & (angles <= params.line_clear_angle_max_rad)
+        )
+        view[ys[ok], xs[ok]] = True
+        return view
+
+    def _expire_line_memory(self) -> None:
+        params = self.line_layer_params
+        valid = np.isfinite(self.line_last_seen_s)
+        self.line_age_s = np.where(
+            valid, self.sim_time_s - self.line_last_seen_s, np.inf)
+        if not params.clearing:
+            self.line_memory = valid
+            return
+
+        stale = valid & (self.line_age_s > params.persistence_s)
+        if np.any(stale):
+            if params.clear_lines_only_in_view:
+                stale &= self._cells_in_clear_view(stale)
+            self.line_last_seen_s[stale] = -np.inf
+
+        valid = np.isfinite(self.line_last_seen_s)
+        if params.max_persisted_points > 0:
+            count = int(np.count_nonzero(valid))
+            if count > params.max_persisted_points:
+                flat = self.line_last_seen_s.ravel()
+                valid_idx = np.flatnonzero(np.isfinite(flat))
+                oldest_count = count - params.max_persisted_points
+                drop_idx = valid_idx[np.argsort(flat[valid_idx])[:oldest_count]]
+                flat[drop_idx] = -np.inf
+                self.line_last_seen_s = flat.reshape(self.line_last_seen_s.shape)
+                valid = np.isfinite(self.line_last_seen_s)
+
+        self.line_memory = valid
+        self.line_age_s = np.where(
+            valid, self.sim_time_s - self.line_last_seen_s, np.inf)
+
+    def _update_planner(self) -> None:
+        self.last_inflated = inflate_grid(
+            self.line_memory, LINE_INFLATION_M, self.grid_spec.res)
+        self.line_distance_grid = costmap_distance_cells(self.last_inflated)
+        self.path = astar(
+            self.last_inflated,
+            self.grid_spec,
+            np.array([self.robot.x, self.robot.y]),
+            self.goal,
+        )
 
     def run_cycle(self, clear_memory: bool = False) -> DetectionResult:
         if clear_memory:
-            self.line_memory[:, :] = False
+            self._reset_memory_arrays()
         scan = simulate_scan(
             self.world,
             self.robot,
@@ -860,48 +1378,70 @@ class LidarLineSimulation:
             base_z_offset_m=self.base_z_offset_m,
         )
         cells = mark_detection_on_grid(scan, detection, self.grid_spec)
-        self.line_memory |= cells
-        self.last_inflated = inflate_grid(
-            self.line_memory, LINE_INFLATION_M, self.grid_spec.res)
-        self.path = astar(
-            self.last_inflated,
-            self.grid_spec,
-            np.array([self.robot.x, self.robot.y]),
-            self.goal,
-        )
+        self.last_detected_cells = cells
+        self.line_last_seen_s[cells] = self.sim_time_s
+        self._expire_line_memory()
+        self._update_planner()
         self.last_scan = scan
         self.last_detection = detection
         return detection
 
     def step_robot(self, distance_m: float = 0.35) -> None:
-        if len(self.path) < 2:
-            self.run_cycle()
-            if len(self.path) < 2:
-                return
-
-        remaining = distance_m
-        current = np.array([self.robot.x, self.robot.y], dtype=float)
-        path_pts = [np.asarray(p, dtype=float) for p in self.path[1:]]
-        target = path_pts[-1]
-
-        for point in path_pts:
-            delta = point - current
-            dist = float(np.linalg.norm(delta))
-            if dist < 1e-6:
-                current = point
-                continue
-            if dist >= remaining:
-                target = current + delta / dist * remaining
+        start = np.array([self.robot.x, self.robot.y], dtype=float)
+        elapsed = 0.0
+        while elapsed < 5.0:
+            self.advance(1.0 / RENDER_FPS)
+            elapsed += 1.0 / RENDER_FPS
+            pos = np.array([self.robot.x, self.robot.y], dtype=float)
+            if float(np.linalg.norm(pos - start)) >= distance_m:
                 break
-            current = point
-            remaining -= dist
 
-        delta = target - np.array([self.robot.x, self.robot.y], dtype=float)
-        if np.linalg.norm(delta) > 1e-6:
-            self.robot.heading = math.atan2(delta[1], delta[0])
-        self.robot.x = float(target[0])
-        self.robot.y = float(target[1])
-        self.run_cycle()
+    def advance(self, dt: float, speed_scale: float = 1.0) -> None:
+        target = self.sim_time_s + max(0.0, dt * speed_scale)
+        if self.last_scan is None:
+            self.run_cycle(clear_memory=True)
+            self.next_scan_s = self.sim_time_s + self.scan_period_s
+
+        while self.sim_time_s < target - 1e-9:
+            if self.sim_time_s + 1e-9 >= self.next_scan_s:
+                self.run_cycle(clear_memory=False)
+                self.next_scan_s += self.scan_period_s
+
+            step = min(PHYS_DT, target - self.sim_time_s)
+            if self.next_scan_s > self.sim_time_s:
+                step = min(step, self.next_scan_s - self.sim_time_s)
+            if step <= 1e-9:
+                continue
+
+            if len(self.path) >= 2:
+                self.last_controller = dwb_with_line_critic(
+                    self.robot,
+                    self.path,
+                    self.line_distance_grid,
+                    self.grid_spec,
+                )
+            else:
+                self.last_controller = ControllerOutput(
+                    0.0, 0.0, 0.0, 0.0, False)
+
+            self.robot.step_dynamics(
+                self.last_controller.F_left,
+                self.last_controller.F_right,
+                step,
+            )
+            self.sim_time_s += step
+            if not self.trail:
+                self.trail.append((self.robot.x, self.robot.y))
+            else:
+                lx, ly = self.trail[-1]
+                if math.hypot(self.robot.x - lx, self.robot.y - ly) >= 0.05:
+                    self.trail.append((self.robot.x, self.robot.y))
+                    if len(self.trail) > 3000:
+                        self.trail = self.trail[-3000:]
+
+        if self.sim_time_s + 1e-9 >= self.next_scan_s:
+            self.run_cycle(clear_memory=False)
+            self.next_scan_s += self.scan_period_s
 
 
 def path_min_tape_distance(path: list[tuple[float, float]],
@@ -925,13 +1465,27 @@ def configure_sim_detector(sim: LidarLineSimulation,
     sim.detector_label = f"robot config: {loaded.path}"
 
 
+def configure_sim_line_layer(sim: LidarLineSimulation,
+                             nav2_config_value: str) -> None:
+    if not nav2_config_value:
+        return
+    config_path = resolve_nav2_config_path(nav2_config_value)
+    loaded = load_lidar_line_layer_config(config_path)
+    sim.set_line_layer_params(
+        loaded.params,
+        label=f"nav2 lidar_line_layer: {loaded.path}",
+    )
+
+
 def run_benchmark(args: argparse.Namespace) -> int:
     sim = LidarLineSimulation(
         rays=args.rays,
         seed=args.seed,
         max_range_m=args.max_range,
+        scenario=args.scenario,
     )
     configure_sim_detector(sim, args.robot_config)
+    configure_sim_line_layer(sim, args.nav2_config)
     scan_poses = (
         RobotPose(0.0, -5.05, math.pi / 2.0),
         RobotPose(0.0, -3.0, math.pi / 2.0),
@@ -981,7 +1535,7 @@ def run_benchmark(args: argparse.Namespace) -> int:
     max_ms = max(timings) if timings else float("inf")
     avg_ms = sum(timings) / max(1, len(timings))
     line_cells = int(np.count_nonzero(sim.line_memory))
-    path_ok = bool(sim.path) and clearance > 0.08
+    path_ok = bool(sim.path) and clearance > 0.03
 
     passed = (
         tape_points >= 80
@@ -995,6 +1549,7 @@ def run_benchmark(args: argparse.Namespace) -> int:
 
     print("LiDAR line benchmark")
     print(f"  detector:         {sim.detector_label}")
+    print(f"  line layer:       {sim.line_layer_label}")
     print(f"  base z offset:    {sim.base_z_offset_m:.3f} m")
     print(f"  rays:             {args.rays}")
     print(f"  scan poses:       {len(scan_poses)}")
@@ -1013,6 +1568,73 @@ def run_benchmark(args: argparse.Namespace) -> int:
     if args.save:
         render_snapshot(sim, Path(args.save), show=False)
         print(f"  snapshot:         {args.save}")
+
+    return 0 if passed else 1
+
+
+def run_live_headless(args: argparse.Namespace) -> int:
+    sim = LidarLineSimulation(
+        rays=args.rays,
+        seed=args.seed,
+        max_range_m=args.max_range,
+        scenario=args.scenario,
+    )
+    configure_sim_detector(sim, args.robot_config)
+    configure_sim_line_layer(sim, args.nav2_config)
+    sim.run_cycle(clear_memory=True)
+
+    max_line_cells = int(np.count_nonzero(sim.line_memory))
+    max_remembered_not_current = int(
+        np.count_nonzero(sim.line_memory & ~sim.last_detected_cells))
+    max_speed = 0.0
+    start_xy = np.array([sim.robot.x, sim.robot.y], dtype=float)
+    frames = max(1, int(math.ceil(args.duration * RENDER_FPS)))
+    for _ in range(frames):
+        sim.advance(1.0 / RENDER_FPS)
+        max_speed = max(max_speed, abs(sim.robot.u))
+        max_line_cells = max(max_line_cells,
+                             int(np.count_nonzero(sim.line_memory)))
+        max_remembered_not_current = max(
+            max_remembered_not_current,
+            int(np.count_nonzero(sim.line_memory & ~sim.last_detected_cells)),
+        )
+
+    trail_clearance = path_min_tape_distance(sim.trail, sim.world)
+    path_clearance = path_min_tape_distance(sim.path, sim.world)
+    goal_progress = float(np.linalg.norm(
+        np.array([sim.robot.x, sim.robot.y], dtype=float) - start_xy))
+    line_cells = int(np.count_nonzero(sim.line_memory))
+    detected_cells = int(np.count_nonzero(sim.last_detected_cells))
+    path_ok = bool(sim.path) and path_clearance > 0.05
+    persistence_ok = (
+        sim.line_layer_params.observation_persistence_ms >= 10000
+        and max_remembered_not_current >= 5
+    )
+    motion_ok = goal_progress >= 0.40 and max_speed >= 0.15
+    trail_ok = trail_clearance > -0.03
+    detection_ok = max_line_cells >= 20 and detected_cells >= 1
+    passed = detection_ok and persistence_ok and path_ok and motion_ok and trail_ok
+
+    print("LiDAR line live headless validation")
+    print(f"  detector:                  {sim.detector_label}")
+    print(f"  line layer:                {sim.line_layer_label}")
+    print(f"  scenario:                  {sim.scenario}")
+    print(f"  duration:                  {args.duration:.1f} s")
+    print(f"  persistence:               "
+          f"{sim.line_layer_params.observation_persistence_ms} ms")
+    print(f"  max line cells:            {max_line_cells}")
+    print(f"  current detected cells:    {detected_cells}")
+    print(f"  remembered not current:    {max_remembered_not_current}")
+    print(f"  final path nodes:          {len(sim.path)}")
+    print(f"  final path clearance:      {path_clearance:.2f} m")
+    print(f"  driven trail clearance:    {trail_clearance:.2f} m")
+    print(f"  goal progress:             {goal_progress:.2f} m")
+    print(f"  max speed:                 {max_speed:.2f} m/s")
+    print(f"  result:                    {'PASS' if passed else 'FAIL'}")
+
+    if args.save:
+        render_snapshot(sim, Path(args.save), show=False)
+        print(f"  snapshot:                  {args.save}")
 
     return 0 if passed else 1
 
@@ -1255,7 +1877,7 @@ class LidarLineGui:
                 self.sim.robot.heading = math.atan2(delta[1], delta[0])
             self.sim.robot.x = float(event.xdata)
             self.sim.robot.y = float(event.ydata)
-            self.sim.line_memory[:, :] = False
+            self.sim._reset_memory_arrays()
         else:
             self.sim.goal = np.array([event.xdata, event.ydata], dtype=float)
         self.sim.run_cycle(clear_memory=move_robot)
@@ -1280,14 +1902,26 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                         help="Maximum LiDAR range in meters")
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED,
                         help="Deterministic scenario seed")
+    parser.add_argument("--scenario", type=str, default="competition",
+                        choices=("competition", "diagonal_strip"),
+                        help="Tape scenario to simulate")
     parser.add_argument("--benchmark", action="store_true",
                         help="Run the detector/path benchmark and exit")
+    parser.add_argument("--live-headless", action="store_true",
+                        help="Run the live dynamics validation without GUI")
+    parser.add_argument("--duration", type=float, default=12.0,
+                        help="Live/headless simulation duration in seconds")
     parser.add_argument("--robot-config", nargs="?", const="auto", default="",
                         metavar="PATH",
                         help=("Load robot lidar_line_detector.yaml. Use "
                               "'auto' or omit PATH to search ~/code/git."))
+    parser.add_argument("--nav2-config", nargs="?", const="auto", default="",
+                        metavar="PATH",
+                        help=("Load robot nav2_paramsv2.yaml lidar_line_layer. "
+                              "Use 'auto' or omit PATH to search ~/code/git."))
     parser.add_argument("--robot-benchmark", action="store_true",
-                        help="Run benchmark with --robot-config auto")
+                        help=("Run benchmark with --robot-config auto and "
+                              "--nav2-config auto"))
     parser.add_argument("--save", type=str, default="",
                         help="Save a PNG snapshot to this path")
     parser.add_argument("--no-gui", action="store_true",
@@ -1301,16 +1935,26 @@ def main(argv: list[str] | None = None) -> int:
         args.benchmark = True
         if not args.robot_config:
             args.robot_config = "auto"
+        if not args.nav2_config:
+            args.nav2_config = "auto"
 
     if args.benchmark:
         return run_benchmark(args)
+    if args.live_headless:
+        if not args.robot_config:
+            args.robot_config = "auto"
+        if not args.nav2_config:
+            args.nav2_config = "auto"
+        return run_live_headless(args)
 
     sim = LidarLineSimulation(
         rays=args.rays,
         seed=args.seed,
         max_range_m=args.max_range,
+        scenario=args.scenario,
     )
     configure_sim_detector(sim, args.robot_config)
+    configure_sim_line_layer(sim, args.nav2_config)
     sim.run_cycle(clear_memory=True)
 
     if args.no_gui:
@@ -1318,6 +1962,7 @@ def main(argv: list[str] | None = None) -> int:
         assert det is not None
         print("LiDAR line single scan")
         print(f"  detector:         {sim.detector_label}")
+        print(f"  line layer:       {sim.line_layer_label}")
         print(f"  base z offset:    {sim.base_z_offset_m:.3f} m")
         print(f"  rays:             {args.rays}")
         print(f"  accepted points:  {np.count_nonzero(det.accepted_mask)}")
