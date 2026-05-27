@@ -65,6 +65,22 @@ cd lidar_line_sim
 ./Run_LIDAR_LINE_ROS_COURSE_TEST.command
 ```
 
+On this Mac/Lima VM setup, launch live RViz through the VM-backed VNC session:
+
+```bash
+cd lidar_line_sim
+./Run_LIDAR_LINE_ROS_COURSE_RVIZ.command
+```
+
+That script starts RViz inside the `autonav-ros22` VM on a virtual Linux
+display, opens a local VNC tunnel at `vnc://localhost:5902`, and syncs the
+course RViz config before launch. The default VNC password is `autonav`. Run
+the ROS course stack in a second terminal while RViz stays open. The RViz
+config shows global/local costmaps, the lidar-line costmap, `/plan`,
+`/local_plan`, PCA scan/points, and `/lidar_line_detection/debug/points`. The
+custom `/lidar_line_points` message is not displayed directly; use the debug
+PointCloud2 topic for detected line points.
+
 Set `AUTONAV_REPO=/path/to/AutoNav_25-26` if the checkout is not at
 `~/code/git/AutoNav_25-26`. The launch file starts:
 
