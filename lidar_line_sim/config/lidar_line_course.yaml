@@ -1,0 +1,30 @@
+# Canonical lidar-line avoidance course dimensions.
+#
+# Coordinates named "lidar_*" use the physical measurement convention from
+# AutoNav_25-26/docs/LIDAR_LINE_AVOIDANCE_COURSE.md: +x forward from the
+# starting lidar sensor, +y left. Runtime simulation converts these to the
+# Nav2 nav_center frame by adding lidar_x_from_nav_center_m to x.
+
+lidar_x_from_nav_center_m: 0.4348
+base_link_to_nav_center_m: 0.2250
+lidar_x_from_base_link_m: 0.6598
+
+tape_width_m: 0.12
+left_tape_y_m: 0.50
+left_tape_lidar_start_x_m: -0.6598
+left_tape_length_m: 3.20
+
+perpendicular_tape_lidar_x_m: 0.905
+perpendicular_tape_left_y_m: 0.50
+perpendicular_tape_right_y_m: -0.13
+
+cone_gap_m: 1.524
+cone_left_boundary_y_m: -1.654
+cone_radius_m: 0.23
+cone_height_m: 0.70
+
+goal_forward_m: 2.0
+
+required_centerline_tape_side_y_m: -0.57
+required_centerline_cone_side_y_m: -1.21
+nominal_centerline_y_m: -0.89

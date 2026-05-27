@@ -64,6 +64,7 @@ class LiveWorldWidget:
         self.show_scan = True
         self.show_candidates = True
         self.show_detected = True
+        self.show_pca = True
         self.show_memory = True
         self.show_inflation = True
         self.show_path = True
@@ -72,20 +73,40 @@ class LiveWorldWidget:
     def update(self) -> None:
         self.widget.update()
 
-    def _world_to_screen(self, x: float, y: float) -> tuple[float, float]:
+    def _view_transform(self) -> tuple[float, float, float]:
         margin = 28.0
-        w = max(1.0, self.widget.width() - 2.0 * margin)
-        h = max(1.0, self.widget.height() - 2.0 * margin)
-        sx = margin + (x - FIELD_X_MIN) / (FIELD_X_MAX - FIELD_X_MIN) * w
-        sy = margin + (FIELD_Y_MAX - y) / (FIELD_Y_MAX - FIELD_Y_MIN) * h
+        world_w = FIELD_X_MAX - FIELD_X_MIN
+        world_h = FIELD_Y_MAX - FIELD_Y_MIN
+        avail_w = max(1.0, self.widget.width() - 2.0 * margin)
+        avail_h = max(1.0, self.widget.height() - 2.0 * margin)
+        scale = min(avail_w / world_w, avail_h / world_h)
+        draw_w = world_w * scale
+        draw_h = world_h * scale
+        origin_x = (self.widget.width() - draw_w) * 0.5
+        origin_y = (self.widget.height() - draw_h) * 0.5
+        return origin_x, origin_y, scale
+
+    def _map_rect(self):
+        origin_x, origin_y, scale = self._view_transform()
+        return self.QtCore.QRectF(
+            origin_x,
+            origin_y,
+            (FIELD_X_MAX - FIELD_X_MIN) * scale,
+            (FIELD_Y_MAX - FIELD_Y_MIN) * scale,
+        )
+
+    def _world_to_screen(self, x: float, y: float) -> tuple[float, float]:
+        origin_x, origin_y, scale = self._view_transform()
+        sx = origin_x + (x - FIELD_X_MIN) * scale
+        sy = origin_y + (FIELD_Y_MAX - y) * scale
         return sx, sy
 
     def _screen_to_world(self, sx: float, sy: float) -> tuple[float, float]:
-        margin = 28.0
-        w = max(1.0, self.widget.width() - 2.0 * margin)
-        h = max(1.0, self.widget.height() - 2.0 * margin)
-        x = FIELD_X_MIN + (sx - margin) / w * (FIELD_X_MAX - FIELD_X_MIN)
-        y = FIELD_Y_MAX - (sy - margin) / h * (FIELD_Y_MAX - FIELD_Y_MIN)
+        origin_x, origin_y, scale = self._view_transform()
+        x = FIELD_X_MIN + (sx - origin_x) / scale
+        y = FIELD_Y_MAX - (sy - origin_y) / scale
+        x = min(FIELD_X_MAX, max(FIELD_X_MIN, x))
+        y = min(FIELD_Y_MAX, max(FIELD_Y_MIN, y))
         return x, y
 
     def _draw_polyline(self, painter, pts, color, width=2.0) -> None:
@@ -136,30 +157,58 @@ class LiveWorldWidget:
             painter.setPen(pen)
             painter.drawLine(self.QtCore.QPointF(*p0), self.QtCore.QPointF(*p1))
 
+    def _draw_cones(self, painter) -> None:
+        for cone in self.sim.world.cone_obstacles:
+            cx, cy = self._world_to_screen(
+                float(cone.center[0]), float(cone.center[1]))
+            edge_x, _edge_y = self._world_to_screen(
+                float(cone.center[0] + cone.radius_m),
+                float(cone.center[1]))
+            radius_px = abs(edge_x - cx)
+            painter.setBrush(self.QtGui.QColor(244, 123, 32, 185))
+            painter.setPen(self.QtGui.QPen(self.QtGui.QColor("#5c2e0e"), 1.5))
+            painter.drawEllipse(self.QtCore.QPointF(cx, cy),
+                                radius_px, radius_px)
+
     def _draw_points(self, painter) -> None:
         scan = self.sim.last_scan
         detection = self.sim.last_detection
         if scan is None or detection is None:
             return
+        if self.show_pca and self.sim.last_pca_points_world.size:
+            pen = self.QtGui.QPen(self.QtGui.QColor(255, 92, 0, 205))
+            pen.setWidthF(2.4)
+            painter.setPen(pen)
+            pts = self.sim.last_pca_points_world
+            step = max(1, pts.shape[0] // 1000)
+            for point in pts[::step]:
+                sx, sy = self._world_to_screen(float(point[0]), float(point[1]))
+                painter.drawPoint(self.QtCore.QPointF(sx, sy))
         if self.show_scan:
-            painter.setPen(self.QtGui.QPen(self.QtGui.QColor(235, 181, 65, 110)))
-            step = max(1, scan.points_world.shape[0] // 2500)
+            pen = self.QtGui.QPen(self.QtGui.QColor(255, 222, 95, 185))
+            pen.setWidthF(1.8)
+            painter.setPen(pen)
+            step = max(1, scan.points_world.shape[0] // 7000)
             for point in scan.points_world[::step]:
                 sx, sy = self._world_to_screen(float(point[0]), float(point[1]))
                 painter.drawPoint(self.QtCore.QPointF(sx, sy))
         if self.show_candidates:
             pts = scan.points_world[detection.candidate_mask]
-            painter.setPen(self.QtGui.QPen(self.QtGui.QColor("#ffb703")))
+            pen = self.QtGui.QPen(self.QtGui.QColor(255, 183, 3, 175))
+            pen.setWidthF(2.2)
+            painter.setPen(pen)
             step = max(1, pts.shape[0] // 1000)
             for point in pts[::step]:
                 sx, sy = self._world_to_screen(float(point[0]), float(point[1]))
                 painter.drawPoint(self.QtCore.QPointF(sx, sy))
         if self.show_detected and detection.line_points_world.size:
-            painter.setBrush(self.QtGui.QColor("#00d6ff"))
-            painter.setPen(self.QtGui.QPen(self.QtGui.QColor("#00343d")))
+            painter.setBrush(self.QtGui.QColor(0, 109, 140, 90))
+            pen = self.QtGui.QPen(self.QtGui.QColor(0, 42, 54, 230))
+            pen.setWidthF(1.5)
+            painter.setPen(pen)
             for point in detection.line_points_world:
                 sx, sy = self._world_to_screen(float(point[0]), float(point[1]))
-                painter.drawEllipse(self.QtCore.QPointF(sx, sy), 3.2, 3.2)
+                painter.drawEllipse(self.QtCore.QPointF(sx, sy), 3.4, 3.4)
 
     def _draw_robot(self, painter) -> None:
         poly = self.sim.robot.footprint_polygon()
@@ -180,15 +229,20 @@ class LiveWorldWidget:
     def paint_event(self, _event) -> None:
         painter = self.QtGui.QPainter(self.widget)
         painter.setRenderHint(self.QtGui.QPainter.Antialiasing)
-        painter.fillRect(self.widget.rect(), self.QtGui.QColor("#47655d"))
+        painter.fillRect(self.widget.rect(), self.QtGui.QColor("#263b36"))
+        painter.fillRect(self._map_rect(), self.QtGui.QColor("#47655d"))
+        painter.setPen(self.QtGui.QPen(self.QtGui.QColor(255, 255, 255, 60), 1.0))
+        painter.setBrush(self.QtCore.Qt.NoBrush)
+        painter.drawRect(self._map_rect())
 
         if self.show_inflation:
             self._draw_grid_cells(painter, self.sim.last_inflated,
-                                  "#ff595e", 70)
+                                  "#ff595e", 48)
         if self.show_memory:
             self._draw_grid_cells(painter, self.sim.line_memory,
-                                  "#168aad", 185)
+                                  "#168aad", 60)
         self._draw_tape(painter)
+        self._draw_cones(painter)
         self._draw_points(painter)
         if self.show_trail:
             self._draw_polyline(painter, self.sim.trail, "#0b3954", 2.0)
@@ -208,10 +262,19 @@ class LiveWorldWidget:
             f"v={self.sim.robot.u:4.2f}m/s  "
             f"w={self.sim.robot.omega:4.2f}rad/s  "
             f"cells={int(np.count_nonzero(self.sim.line_memory))}  "
-            f"path={len(self.sim.path)}"
+            f"path={len(self.sim.path)}  "
+            f"mode={self.sim.recovery_mode}  "
+            f"crumbs={len(self.sim.breadcrumbs)}"
         )
         if det is not None:
-            text += f"  clusters={len(det.clusters)}  det={det.elapsed_ms:.1f}ms"
+            text += (
+                f"  refl={det.reflector_candidate_count}  "
+                f"cand={det.selected_candidate_count}  "
+                f"clusters={len(det.clusters)}/{det.raw_cluster_count}  "
+                f"rej={det.rejected_cluster_count}  "
+                f"out={det.line_points_world.shape[0]}  "
+                f"det={det.elapsed_ms:.1f}ms"
+            )
         painter.setPen(self.QtGui.QPen(self.QtGui.QColor("#ffffff")))
         painter.drawText(18, 24, text)
         painter.end()
@@ -222,6 +285,11 @@ class LiveWorldWidget:
             self.sim.robot.x = x
             self.sim.robot.y = y
             self.sim._reset_memory_arrays()
+            self.sim.trail = [(self.sim.robot.x, self.sim.robot.y)]
+            self.sim.breadcrumbs = []
+            self.sim.last_breadcrumb_drop = None
+            self.sim.crumbs_consumed_session = 0
+            self.sim.recovery_mode = "IDLE"
             self.sim.run_cycle(clear_memory=True)
         else:
             self.sim.goal = np.array([x, y], dtype=float)
@@ -256,7 +324,9 @@ class MainWindow:
 
         toolbar.addWidget(qt_widgets.QLabel("Scenario"))
         self.scenario_box = qt_widgets.QComboBox()
-        self.scenario_box.addItems(["diagonal_strip", "competition"])
+        self.scenario_box.addItems([
+            "lidar_line_course", "complex_maze", "line_maze",
+            "diagonal_strip", "competition"])
         self.scenario_box.setCurrentText(args.scenario)
         self.scenario_box.currentTextChanged.connect(self.change_scenario)
         toolbar.addWidget(self.scenario_box)
@@ -280,6 +350,7 @@ class MainWindow:
             ("Scan", "show_scan"),
             ("Candidates", "show_candidates"),
             ("Detected", "show_detected"),
+            ("PCA", "show_pca"),
             ("Memory", "show_memory"),
             ("Inflation", "show_inflation"),
             ("Path", "show_path"),
@@ -333,12 +404,19 @@ class MainWindow:
     def update_status(self) -> None:
         det = self.sim.last_detection
         clusters = len(det.clusters) if det is not None else 0
+        rejected = det.rejected_cluster_count if det is not None else 0
+        output_points = (
+            det.line_points_world.shape[0] if det is not None else 0)
         self.status.setText(
             f"Detector: {self.sim.detector_label} | "
             f"Line layer: {self.sim.line_layer_label} | "
             f"Persistence: "
-            f"{self.sim.line_layer_params.observation_persistence_ms} ms | "
-            f"Clusters: {clusters} | "
+            f"{self.sim.persistence_summary()} | "
+            f"Accepted clusters: {clusters} | "
+            f"Rejected clusters: {rejected} | "
+            f"Output points: {output_points} | "
+            f"Mode: {self.sim.recovery_mode} | "
+            f"Breadcrumbs: {len(self.sim.breadcrumbs)} | "
             "Left-click sets goal, right-click moves robot"
         )
 
@@ -363,15 +441,17 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--rays", type=int, default=DEFAULT_RAYS)
     parser.add_argument("--max-range", type=float, default=DEFAULT_MAX_RANGE_M)
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
-    parser.add_argument("--scenario", type=str, default="diagonal_strip",
-                        choices=("competition", "diagonal_strip"))
+    parser.add_argument("--scenario", type=str, default="lidar_line_course",
+                        choices=("competition", "diagonal_strip",
+                                 "line_maze", "complex_maze",
+                                 "lidar_line_course"))
     parser.add_argument("--robot-config", nargs="?", const="auto",
                         default="auto", metavar="PATH")
     parser.add_argument("--nav2-config", nargs="?", const="auto",
                         default="auto", metavar="PATH")
     parser.add_argument("--headless", action="store_true",
                         help="Run deterministic live validation without GUI")
-    parser.add_argument("--duration", type=float, default=12.0)
+    parser.add_argument("--duration", type=float, default=100.0)
     parser.add_argument("--save", type=str, default="")
     return parser.parse_args(argv)
 
