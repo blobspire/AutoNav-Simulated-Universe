@@ -4,8 +4,8 @@
 This node is intentionally small and explicit: it publishes the robot-facing
 topics that the real AutoNav detection/Nav2 stack expects, then integrates the
 robot pose from the final /cmd_vel command. It is not a replacement planner or
-controller. The point is to feed canonical synthetic lidar/PCA data into the
-actual stack.
+controller. The point is to feed conservative, beam-faithful synthetic
+LiDAR/PCA data into the actual stack.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from pathlib import Path
 import numpy as np
 
 from lidar_line_course import load_lidar_line_course
-from lidar_ray_model import cone_occludes_point, raycast_cylindrical_cones
+from lidar_ray_model import raycast_cylindrical_cones
 
 try:
     import rclpy
@@ -52,8 +52,14 @@ LIDAR_HARDWARE_ELEVATION_MAX_RAD = math.radians(7.5)
 LIDAR_HORIZONTAL_RES_RAD = math.radians(0.5)
 
 MAX_LINEAR_SPEED_MPS = 0.25
-MAX_ANGULAR_SPEED_RADPS = 0.65
+MAX_ANGULAR_SPEED_RADPS = 1.0
 CMD_TIMEOUT_S = 0.40
+RANGE_MIN_M = 0.20
+RANGE_MAX_M = 8.5
+FLOOR_RSSI = 30000.0
+TAPE_RSSI = 52000.0
+CONE_RSSI = 33000.0
+CONE_REFLECTOR_RSSI = 50000.0
 
 
 def _yaw_quaternion(yaw: float) -> tuple[float, float, float, float]:
@@ -82,6 +88,10 @@ def _stamp_to_float(stamp: Time) -> float:
     return float(stamp.sec) + float(stamp.nanosec) * 1e-9
 
 
+def _clamp(value: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, value))
+
+
 class LidarLineCourseHarness(Node):
     def __init__(self) -> None:
         super().__init__("lidar_line_course_harness")
@@ -94,21 +104,32 @@ class LidarLineCourseHarness(Node):
         self.declare_parameter("cloud_rate_hz", 10.0)
         self.declare_parameter("odom_rate_hz", 50.0)
         self.declare_parameter("map_rate_hz", 1.0)
+        # Deprecated compatibility knobs. The current harness uses
+        # beam-first returns instead of sampled floor/tape/cone point grids.
         self.declare_parameter("floor_spacing_m", 0.10)
         self.declare_parameter("tape_spacing_m", 0.025)
         self.declare_parameter("cone_spacing_m", 0.06)
+        self.declare_parameter("cmd_latency_s", 0.08)
+        self.declare_parameter("linear_time_constant_s", 0.20)
+        self.declare_parameter("angular_time_constant_s", 0.18)
+        self.declare_parameter("linear_deadband_mps", 0.02)
+        self.declare_parameter("angular_deadband_radps", 0.04)
 
         course_path = Path(
             str(self.get_parameter("course_config").value)).expanduser()
         self.course = load_lidar_line_course(course_path)
         self.publish_ground_truth_pca = bool(
             self.get_parameter("publish_ground_truth_pca").value)
-        self.floor_spacing_m = float(
-            self.get_parameter("floor_spacing_m").value)
-        self.tape_spacing_m = float(
-            self.get_parameter("tape_spacing_m").value)
-        self.cone_spacing_m = float(
-            self.get_parameter("cone_spacing_m").value)
+        self.cmd_latency_s = max(
+            0.0, float(self.get_parameter("cmd_latency_s").value))
+        self.linear_time_constant_s = max(
+            0.0, float(self.get_parameter("linear_time_constant_s").value))
+        self.angular_time_constant_s = max(
+            0.0, float(self.get_parameter("angular_time_constant_s").value))
+        self.linear_deadband_mps = max(
+            0.0, float(self.get_parameter("linear_deadband_mps").value))
+        self.angular_deadband_radps = max(
+            0.0, float(self.get_parameter("angular_deadband_radps").value))
 
         sensor_qos = QoSProfile(depth=5)
         sensor_qos.reliability = ReliabilityPolicy.BEST_EFFORT
@@ -141,6 +162,9 @@ class LidarLineCourseHarness(Node):
         self.heading = 0.0
         self.cmd_v = 0.0
         self.cmd_w = 0.0
+        self.applied_v = 0.0
+        self.applied_w = 0.0
+        self.pending_commands: list[tuple[float, float, float]] = []
         self.last_cmd_s = -math.inf
         self.last_step_s: float | None = None
 
@@ -169,11 +193,13 @@ class LidarLineCourseHarness(Node):
         )
 
     def _cmd_vel_callback(self, msg: Twist) -> None:
-        self.cmd_v = max(-MAX_LINEAR_SPEED_MPS,
-                         min(MAX_LINEAR_SPEED_MPS, float(msg.linear.x)))
-        self.cmd_w = max(-MAX_ANGULAR_SPEED_RADPS,
-                         min(MAX_ANGULAR_SPEED_RADPS, float(msg.angular.z)))
-        self.last_cmd_s = _stamp_to_float(self.get_clock().now().to_msg())
+        now_s = _stamp_to_float(self.get_clock().now().to_msg())
+        cmd_v = _clamp(float(msg.linear.x),
+                       -MAX_LINEAR_SPEED_MPS, MAX_LINEAR_SPEED_MPS)
+        cmd_w = _clamp(float(msg.angular.z),
+                       -MAX_ANGULAR_SPEED_RADPS, MAX_ANGULAR_SPEED_RADPS)
+        self.pending_commands.append((now_s + self.cmd_latency_s, cmd_v, cmd_w))
+        self.last_cmd_s = now_s
 
     def _publish_static_transforms(self) -> None:
         stamp = self.get_clock().now().to_msg()
@@ -261,21 +287,32 @@ class LidarLineCourseHarness(Node):
             -(bz - LIDAR_Z_FROM_BASE_LINK_M),
         )
 
-    def _append_cloud_point(self,
-                            out: list[tuple[float, float, float, float,
-                                            float, float, float, float]],
-                            world_x: float,
-                            world_y: float,
-                            z_above_ground: float,
-                            intensity: float,
-                            reflector: bool,
-                            layer: int = 0) -> None:
+    def _append_cloud_point(
+        self,
+        out: list[tuple[float, float, float, float,
+                        float, float, float, float]],
+        world_x: float,
+        world_y: float,
+        z_above_ground: float,
+        intensity: float,
+        reflector: bool,
+        layer: int = 0,
+    ) -> None:
         lidar = self._base_to_lidar(
             self._world_to_base(world_x, world_y, z_above_ground))
         rng = math.sqrt(lidar[0] ** 2 + lidar[1] ** 2 + lidar[2] ** 2)
-        if rng < 0.20 or rng > 8.5:
+        if rng < RANGE_MIN_M or rng > RANGE_MAX_M:
             return
-        out.append((
+        out.append(self._cloud_tuple(lidar, rng, intensity, reflector, layer))
+
+    @staticmethod
+    def _cloud_tuple(lidar: tuple[float, float, float],
+                     rng: float,
+                     intensity: float,
+                     reflector: bool,
+                     layer: int) -> tuple[float, float, float, float,
+                                          float, float, float, float]:
+        return (
             float(lidar[0]),
             float(lidar[1]),
             float(lidar[2]),
@@ -284,13 +321,7 @@ class LidarLineCourseHarness(Node):
             float(layer),
             0.0,
             1.0 if reflector else 0.0,
-        ))
-
-    def _world_in_front_arc(self, x: float, y: float) -> bool:
-        bx, by, _bz = self._world_to_base(x, y, 0.0)
-        if bx < -0.2 or bx > 6.0:
-            return False
-        return abs(math.atan2(by, max(0.001, bx))) <= math.pi / 2.0
+        )
 
     def _tape_distance(self, x: float, y: float) -> float:
         best = math.inf
@@ -310,17 +341,6 @@ class LidarLineCourseHarness(Node):
             best = min(best, dist)
         return best
 
-    def _cone_occludes_point(self,
-                             x: float,
-                             y: float,
-                             z_above_ground: float) -> bool:
-        return cone_occludes_point(
-            self.course.cones,
-            self._lidar_origin_world(),
-            SENSOR_HEIGHT_M,
-            (x, y, z_above_ground),
-        )
-
     def _raycast_cone_hits(self):
         return raycast_cylindrical_cones(
             self.course.cones,
@@ -333,49 +353,138 @@ class LidarLineCourseHarness(Node):
             LIDAR_HARDWARE_ELEVATION_MIN_RAD,
             LIDAR_HARDWARE_ELEVATION_MAX_RAD,
             MULTISCAN_LAYERS,
-            0.20,
-            8.5,
+            RANGE_MIN_M,
+            RANGE_MAX_M,
         )
 
     def _build_cloud_points(self) -> list[tuple[float, float, float, float,
                                                float, float, float, float]]:
+        """Generate first-return synthetic LiDAR points.
+
+        Older versions sampled floor grids and tape centerlines directly,
+        which made retroreflective tape visible even when no beam intersected
+        it. This path uses one ordered return per physical beam: cone surface
+        beats floor/tape when closer, otherwise the downward beam returns the
+        floor point with the reflector bit set only if the finite tape geometry
+        is actually under that beam.
+        """
+
         points: list[tuple[float, float, float, float,
                            float, float, float, float]] = []
-        floor_x = np.arange(-0.5, 6.1, self.floor_spacing_m)
-        floor_y = np.arange(-3.2, 3.21, self.floor_spacing_m)
-        for x in floor_x:
-            for y in floor_y:
-                if not self._world_in_front_arc(float(x), float(y)):
+        cone_hits = {
+            (hit.layer, round(hit.azimuth_rad, 9)): hit
+            for hit in self._raycast_cone_hits()
+        }
+        azimuth_count = (
+            int(math.floor((LIDAR_AZIMUTH_MAX_RAD - LIDAR_AZIMUTH_MIN_RAD)
+                           / LIDAR_HORIZONTAL_RES_RAD))
+            + 1
+        )
+        origin_x, origin_y = self._lidar_origin_world()
+        for layer in range(MULTISCAN_LAYERS):
+            if MULTISCAN_LAYERS == 1:
+                elevation = 0.5 * (
+                    LIDAR_HARDWARE_ELEVATION_MIN_RAD
+                    + LIDAR_HARDWARE_ELEVATION_MAX_RAD)
+            else:
+                frac = layer / float(MULTISCAN_LAYERS - 1)
+                elevation = LIDAR_HARDWARE_ELEVATION_MIN_RAD + (
+                    LIDAR_HARDWARE_ELEVATION_MAX_RAD
+                    - LIDAR_HARDWARE_ELEVATION_MIN_RAD) * frac
+            cos_elevation = math.cos(elevation)
+            tan_elevation = math.tan(elevation)
+            if cos_elevation <= 1e-6:
+                continue
+
+            for azimuth_idx in range(azimuth_count):
+                azimuth = LIDAR_AZIMUTH_MIN_RAD + (
+                    LIDAR_HORIZONTAL_RES_RAD * azimuth_idx)
+                if azimuth > LIDAR_AZIMUTH_MAX_RAD + 1e-9:
                     continue
-                if self._cone_occludes_point(float(x), float(y), 0.0):
+
+                best_range = math.inf
+                best: tuple[float, float, float, float, bool] | None = None
+                cone_hit = cone_hits.get((layer, round(azimuth, 9)))
+                if cone_hit is not None:
+                    reflector = cone_hit.z > 0.28
+                    best_range = cone_hit.range_m
+                    best = (
+                        cone_hit.x,
+                        cone_hit.y,
+                        cone_hit.z,
+                        CONE_REFLECTOR_RSSI if reflector else CONE_RSSI,
+                        reflector,
+                    )
+
+                if tan_elevation < -1e-6:
+                    horizontal_distance = -SENSOR_HEIGHT_M / tan_elevation
+                    floor_range = horizontal_distance / cos_elevation
+                    if RANGE_MIN_M <= floor_range <= RANGE_MAX_M:
+                        world_angle = self.heading + azimuth
+                        floor_x = (
+                            origin_x + horizontal_distance
+                            * math.cos(world_angle))
+                        floor_y = (
+                            origin_y + horizontal_distance
+                            * math.sin(world_angle))
+                        if floor_range < best_range:
+                            on_tape = self._point_on_tape(floor_x, floor_y)
+                            best_range = floor_range
+                            best = (
+                                floor_x,
+                                floor_y,
+                                0.0,
+                                TAPE_RSSI if on_tape else FLOOR_RSSI,
+                                on_tape,
+                            )
+
+                if best is None:
                     continue
-                on_tape = self._tape_distance(float(x), float(y)) <= 0.06
+                world_x, world_y, z_above_ground, intensity, reflector = best
                 self._append_cloud_point(
-                    points, float(x), float(y), 0.0,
-                    50000.0 if on_tape else 30000.0,
-                    on_tape,
-                    layer=0,
+                    points,
+                    world_x,
+                    world_y,
+                    z_above_ground,
+                    intensity,
+                    reflector,
+                    layer,
                 )
+        return points
 
+    def _point_on_tape(self, x: float, y: float) -> bool:
         for tape in self.course.tapes:
-            ax, ay = tape.start
-            bx, by = tape.end
-            length = math.hypot(bx - ax, by - ay)
-            samples = max(2, int(math.ceil(length / self.tape_spacing_m)) + 1)
-            for t in np.linspace(0.0, 1.0, samples):
-                x = ax + (bx - ax) * float(t)
-                y = ay + (by - ay) * float(t)
-                if self._world_in_front_arc(x, y):
-                    if self._cone_occludes_point(x, y, 0.0):
-                        continue
-                    self._append_cloud_point(
-                        points, x, y, 0.0, 52000.0, True, layer=0)
+            if self._point_tape_distance(x, y, tape.start, tape.end) <= (
+                    0.5 * tape.width_m):
+                return True
+        return False
 
+    @staticmethod
+    def _point_tape_distance(x: float,
+                             y: float,
+                             start: tuple[float, float],
+                             end: tuple[float, float]) -> float:
+        ax, ay = start
+        bx, by = end
+        abx = bx - ax
+        aby = by - ay
+        denom = abx * abx + aby * aby
+        if denom <= 1e-12:
+            return math.hypot(x - ax, y - ay)
+        t = max(0.0, min(1.0, ((x - ax) * abx + (y - ay) * aby) / denom))
+        qx = ax + t * abx
+        qy = ay + t * aby
+        return math.hypot(x - qx, y - qy)
+
+    def _build_cone_cloud_points(self) -> list[tuple[float, float, float, float,
+                                                     float, float, float, float]]:
+        points: list[tuple[float, float, float, float,
+                           float, float, float, float]] = []
         for hit in self._raycast_cone_hits():
             reflector = hit.z > 0.28
             self._append_cloud_point(
                 points, hit.x, hit.y, hit.z,
-                50000.0 if reflector else 33000.0,
+                CONE_REFLECTOR_RSSI if reflector else CONE_RSSI,
                 reflector,
                 layer=hit.layer,
             )
@@ -412,9 +521,10 @@ class LidarLineCourseHarness(Node):
         points: list[tuple[float, float, float, float,
                            float, float, float, float]] = []
         for hit in self._raycast_cone_hits():
-            self._append_cloud_point(
-                points, hit.x, hit.y, hit.z, 33000.0, False,
-                layer=hit.layer)
+            # Ground-truth PCA isolates physical obstacles from reflective
+            # tape; reflector state is deliberately false on this debug path.
+            self._append_cloud_point(points, hit.x, hit.y, hit.z, CONE_RSSI,
+                                     False, layer=hit.layer)
         return points
 
     def _publish_scan_fullframe(self,
@@ -460,21 +570,45 @@ class LidarLineCourseHarness(Node):
         dt = max(0.0, min(0.10, now_s - self.last_step_s))
         self.last_step_s = now_s
 
+        while self.pending_commands and self.pending_commands[0][0] <= now_s:
+            _apply_s, self.cmd_v, self.cmd_w = self.pending_commands.pop(0)
+
         if now_s - self.last_cmd_s > CMD_TIMEOUT_S:
-            v = 0.0
-            w = 0.0
+            target_v = 0.0
+            target_w = 0.0
         else:
-            v = self.cmd_v
-            w = self.cmd_w
-        self.nav_x += v * math.cos(self.heading) * dt
-        self.nav_y += v * math.sin(self.heading) * dt
+            target_v = self.cmd_v
+            target_w = self.cmd_w
+
+        if abs(target_v) < self.linear_deadband_mps:
+            target_v = 0.0
+        if abs(target_w) < self.angular_deadband_radps:
+            target_w = 0.0
+
+        self.applied_v = self._first_order_response(
+            self.applied_v, target_v, dt, self.linear_time_constant_s)
+        self.applied_w = self._first_order_response(
+            self.applied_w, target_w, dt, self.angular_time_constant_s)
+
+        self.nav_x += self.applied_v * math.cos(self.heading) * dt
+        self.nav_y += self.applied_v * math.sin(self.heading) * dt
         self.heading = math.atan2(
-            math.sin(self.heading + w * dt),
-            math.cos(self.heading + w * dt),
+            math.sin(self.heading + self.applied_w * dt),
+            math.cos(self.heading + self.applied_w * dt),
         )
         self._publish_dynamic_transforms(now)
-        self._publish_odom(now, v, w)
+        self._publish_odom(now, self.applied_v, self.applied_w)
         self.autonomous_pub.publish(Bool(data=True))
+
+    @staticmethod
+    def _first_order_response(current: float,
+                              target: float,
+                              dt: float,
+                              tau: float) -> float:
+        if tau <= 1e-6:
+            return target
+        alpha = 1.0 - math.exp(-max(0.0, dt) / tau)
+        return current + alpha * (target - current)
 
     def _publish_dynamic_transforms(self, stamp: Time) -> None:
         transforms: list[TransformStamped] = []

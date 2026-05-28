@@ -3,25 +3,24 @@
 Reflector/RSSI line-detection simulator for the tape boundary system. The
 canonical mode is now the ROS lidar-line course harness, which publishes
 synthetic SICK/PCA sensor data into the real `AutoNav_25-26` detection, Nav2,
-Smac Lattice, DWB, costmap, and recovery stack. The standalone Python GUI is
+Smac Lattice, MPPI, costmap, and recovery stack. The standalone Python GUI is
 still useful as a fast approximation and visual debugger.
 
 The standalone sim models SICK multiScan-like layered ground returns,
 SICK-style reflector hits from retroreflective tape, optional adaptive RSSI
 fallback extraction, a line avoidance costmap, A* path planning around detected
 line cells, DWB-style local trajectory scoring, PCA cone points, and live robot
-motion constrained by the current `AutoNav_25-26` `path_following_two` Nav2
-settings.
+motion constrained by the current `AutoNav_25-26` Nav2 settings.
 
-The ray model follows the robot's forward LiDAR processing cone: SICK
-multiScan165, 16 layers, 0.5 degree native horizontal spacing, 10 m LiDAR
-range, front 180 degrees around robot +x, and the upside-down robot-frame
-vertical FOV of -35 to +7.5 degrees. The physical sensor can publish a full
-360 degree cloud, but the robot's local planning/detection pipeline clamps to
-the forward half-space for this behavior. Cone returns are modeled as
-first-return intersections against finite vertical cone cylinders, so the
-synthetic cloud only includes the visible cone surface and suppresses floor or
-tape points hidden behind the cone.
+The canonical ROS ray model follows the robot's forward LiDAR processing cone:
+SICK multiScan165, 16 layers, 0.5 degree native horizontal spacing, 8.5 m
+navigation range, front 180 degrees around robot +x, and the upside-down
+robot-frame vertical FOV of -35 to +7.5 degrees. The physical sensor can
+publish a full 360 degree cloud, but the robot's local planning/detection
+pipeline clamps to the forward half-space for this behavior. The ROS harness
+uses one first return per beam: cone surfaces can occlude floor/tape, and tape
+is visible only where a downward beam actually intersects its finite-width
+ground geometry.
 
 ## Run
 
@@ -49,6 +48,8 @@ python lidar_line_sim.py --no-gui --save /tmp/lidar_line_snapshot.png
 
 The macOS and Windows launchers at this folder's root use the same
 `simulated_world/.venv` layout as the other sims.
+
+See `CANONICALITY.md` before using any simulation result as robot evidence.
 
 ## Canonical ROS Course Harness
 
@@ -89,7 +90,8 @@ Set `AUTONAV_REPO=/path/to/AutoNav_25-26` if the checkout is not at
 
 - `ros_lidar_line_course.py`, which publishes `/cloud_all_fields_fullframe`,
   `/scan_fullframe`, `/map_padded`, `/odom`, `/local_ekf/odom`, TF, and
-  `/autonomous_mode`, then integrates motion from `/cmd_vel`.
+  `/autonomous_mode`, then integrates motion from `/cmd_vel` through a
+  conservative latency/deadband/first-order drivetrain model.
 - The real `autonav_detection` grade detector and lidar-line detector.
 - The same PCA PointCloud2-to-LaserScan converters used by the robot.
 - Nav2 using the current robot `nav2_paramsv2.yaml` and BT XML.
@@ -107,8 +109,9 @@ Nav2's `nav_center` frame. The perpendicular tape is therefore at
 Simulation failures should be diagnosed from the recorded bag, not just the
 final pose. The test runner records `/lidar_line_points`,
 `/scan_pca_filtered_points`, line/local/global costmaps, `/plan`,
-`/local_plan`, `/evaluation`, Nav2 action statuses, odom/TF, and `/cmd_vel`,
-then runs the same lidar-line analysis suite used after physical robot tests.
+`/local_plan`, MPPI trajectory debug topics when available, `/evaluation`,
+Nav2 action statuses, odom/TF, and `/cmd_vel`, then runs the same lidar-line
+analysis suite used after physical robot tests.
 
 ## Live Simulation
 
@@ -139,7 +142,8 @@ or Nav2 bringup. It loads the robot detector/Nav2 YAML values and mirrors the
 Nav2 behavioral pieces that matter for quick visualization: the loaded
 line-layer costmap policy, A*-style global planning, DWB-style local trajectory
 scoring, forward-only FollowPath, breadcrumb reverse recovery, and force-based
-controller execution. Use the ROS harness for canonical pass/fail decisions.
+controller execution. That DWB-like controller is intentionally not a model of
+the current MPPI stack. Use the ROS harness for canonical pass/fail decisions.
 
 ## Snapshot Interaction
 
@@ -171,7 +175,7 @@ filters, voxel output size, and max output point count in the sim.
 `lidar_line_layer` persistence values. `--robot-benchmark` is shorthand for
 `--benchmark --robot-config auto --nav2-config auto`, where `auto` searches
 the common local AutoNav checkout paths under `~/code/git` and prefers
-`AutoNav_25-26` for the current `path_following_two` work.
+`AutoNav_25-26`.
 
 The robot node gates ground points in `base_link`, while this sim generates
 points in the LiDAR sensor frame. Robot config mode applies the equivalent
@@ -187,8 +191,8 @@ fallback experiments. The default detector uses `candidate_mode: reflector`;
 the adaptive RSSI values remain available for non-reflective tape testing.
 
 The line memory mirrors the robot's `lidar_line_layer` behavior. On the current
-`AutoNav_25-26` `path_following_two` branch, the lidar line layer uses
-manual-clear persistence for the tape test (`observation_persistence_ms: -1`),
+`AutoNav_25-26` checkout, the lidar line layer uses manual-clear persistence
+for the tape test (`observation_persistence_ms: -1`),
 updates locally at 15 Hz, mirrors to global at 3 Hz, and the behavior tree
 replans at 3 Hz. The simulator also models the C++ detector's completed
 segment output so sparse reflector hits become dense `/lidar_line_points`

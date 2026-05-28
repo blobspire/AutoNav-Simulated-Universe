@@ -111,6 +111,8 @@ ros2 bag record --include-hidden-topics \
   /global_costmap/costmap_raw \
   /plan \
   /local_plan \
+  /trajectories \
+  /transformed_global_plan \
   /evaluation \
   /navigate_to_pose/_action/status \
   /follow_path/_action/status \

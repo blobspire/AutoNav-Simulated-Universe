@@ -36,8 +36,8 @@ notes are in `LiDAR Sim/terrain-grade-layer-plan.md`.
 ### LiDAR Line Sim — `lidar_line_sim/`
 Retroreflective tape detector and avoidance simulator. The canonical mode is a
 ROS harness that publishes the measured lidar-line course as synthetic SICK
-cloud/PCA data into the real `AutoNav_25-26:path_following_two` detection,
-costmap, Smac Lattice, DWB, BT, and recovery stack. The standalone Python mode
+cloud/PCA data into the real `AutoNav_25-26` detection, costmap, Smac Lattice,
+MPPI, BT, and recovery stack. The standalone Python mode
 remains a fast approximation: it generates layered SICK multiScan-style ground
 returns, marks tape with the SICK `reflector` field, completes accepted sparse
 line clusters, approximates PCA cone points, applies the loaded robot
@@ -50,7 +50,8 @@ Run `lidar_line_live_gui.py` for the live maze view,
 benchmark. Use `lidar_line_sim.py --robot-benchmark` to run the same
 benchmark with the robot repo's `lidar_line_detector.yaml`. Use
 `lidar_line_sim/Run_LIDAR_LINE_ROS_COURSE_TEST.command` for the canonical
-recorded course test.
+recorded course test. The trust contract is documented in
+`lidar_line_sim/CANONICALITY.md`.
 
 ### GPS Sim — `GPS Sim/`
 A GPS-without-magnetometer waypoint simulator. The robot has no compass, so

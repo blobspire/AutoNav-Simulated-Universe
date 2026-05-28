@@ -33,7 +33,7 @@ from lidar_line_course import load_lidar_line_course
 from lidar_ray_model import raycast_cylindrical_cones
 
 
-# AutoNav_25-26 path_following_two source of truth:
+# AutoNav_25-26 source of truth:
 #   bringup/description/shogi.urdf:
 #     base_footprint is 0.113030 m below base_link
 #     lidar_footprint is 0.205680 m above base_link
@@ -89,11 +89,11 @@ LINE_INFLATION_M = (
     ROBOT_LATERAL_CLEARANCE_M
     + DEFAULT_TAPE_WIDTH_M * 0.5
 )
-LINE_SOFT_INFLATION_M = 1.10
-PCA_OBSTACLE_INFLATION_M = 1.10
+LINE_SOFT_INFLATION_M = 0.80
+PCA_OBSTACLE_INFLATION_M = 0.85
 
 # Robot dynamics: differential-drive command limits come from
-# AutoNav_25-26 path_following_two nav2_paramsv2.yaml. The physics integrator
+# the active AutoNav_25-26 nav2_paramsv2.yaml. The physics integrator
 # still uses the simple nonholonomic body model from the Behavior Tree sim, but
 # all controller limits, footprint checks, and recovery behavior below are tied
 # to the real robot branch.
@@ -336,8 +336,8 @@ class LineLayerParams:
     line_clear_range_max_m: float = 6.0
     max_persisted_points: int = 2000
     inflation_radius: float = LINE_SOFT_INFLATION_M
-    inscribed_radius: float = 0.05
-    cost_scaling_factor: float = 4.0
+    inscribed_radius: float = 0.10
+    cost_scaling_factor: float = 5.0
     clearing: bool = True
     max_message_age_ms: int = 750
     local_update_frequency_hz: float = 15.0
@@ -492,9 +492,8 @@ def complex_maze_world() -> World:
         TapeSegment(np.array([xl, -5.95]), np.array([xl, 5.95])),
         TapeSegment(np.array([xr, -5.95]), np.array([xr, 5.95])),
 
-        # Main maze walls. These are mostly longitudinal because
-        # path_following_two keeps lidar_line_layer observation persistence at
-        # 0 ms and relies on the Nav2 costmap/mirror timing for a short hold.
+        # Main maze walls. These are mostly longitudinal because sparse
+        # reflector detections rely on Nav2 costmap/mirror timing for hold.
         # Long walls parallel to travel are the geometry the real detector can
         # resolve continuously.
         TapeSegment(np.array([0.00, -3.40]), np.array([0.00, -2.70])),
@@ -1977,7 +1976,8 @@ class LidarLineSimulation:
             self.world.cone_obstacles, self.grid_spec)
         self.pca_inflated = inflate_grid(
             self.pca_obstacle_cells,
-            ROBOT_LATERAL_CLEARANCE_M + LOCAL_FOOTPRINT_PADDING_M,
+            max(PCA_OBSTACLE_INFLATION_M,
+                ROBOT_LATERAL_CLEARANCE_M + LOCAL_FOOTPRINT_PADDING_M),
             self.grid_spec.res,
         )
         self.last_pca_points_world = sample_pca_obstacle_points(
@@ -2002,7 +2002,7 @@ class LidarLineSimulation:
         return 1.0 / max(1e-6, rate)
 
     def nav2_planning_hold_ms(self) -> int:
-        """Nominal last-detection-to-fresh-plan latency on path_following_two."""
+        """Nominal last-detection-to-fresh-plan latency on the robot stack."""
         detector_ms = (
             1000.0 / self.detector_params.max_processing_rate_hz
             if self.detector_params.max_processing_rate_hz > 0.0
@@ -2042,7 +2042,8 @@ class LidarLineSimulation:
             self.world.cone_obstacles, self.grid_spec)
         self.pca_inflated = inflate_grid(
             self.pca_obstacle_cells,
-            ROBOT_LATERAL_CLEARANCE_M + LOCAL_FOOTPRINT_PADDING_M,
+            max(PCA_OBSTACLE_INFLATION_M,
+                ROBOT_LATERAL_CLEARANCE_M + LOCAL_FOOTPRINT_PADDING_M),
             self.grid_spec.res,
         )
         self.last_pca_points_world = sample_pca_obstacle_points(
@@ -2682,7 +2683,7 @@ def run_benchmark(args: argparse.Namespace) -> int:
     max_ms = max(timings) if timings else float("inf")
     avg_ms = sum(timings) / max(1, len(timings))
     line_cells = max_line_cells
-    # path_following_two keeps lidar_line_layer observation persistence at
+    # The robot stack keeps lidar_line_layer observation persistence at
     # 0 ms. The global mirror is spatial: each rolling local window can clear
     # cells it no longer sees, so the detector benchmark scores max observed
     # cells while keeping path validity as the end-to-end smoke test.

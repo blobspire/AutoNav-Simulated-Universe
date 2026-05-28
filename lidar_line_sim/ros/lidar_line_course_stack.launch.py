@@ -143,7 +143,7 @@ def generate_launch_description() -> LaunchDescription:
         }.items(),
         condition=IfCondition(launch_nav2),
     )
-    enable_dwb_debug = TimerAction(
+    enable_controller_debug = TimerAction(
         period=8.0,
         actions=[
             ExecuteProcess(
@@ -152,7 +152,7 @@ def generate_launch_description() -> LaunchDescription:
                     "param",
                     "set",
                     "/controller_server",
-                    "FollowPath.debug_trajectory_details",
+                    "FollowPath.visualize",
                     "true",
                 ],
                 output="screen",
@@ -185,5 +185,5 @@ def generate_launch_description() -> LaunchDescription:
         pca_scan,
         pca_scan_clear,
         nav2,
-        enable_dwb_debug,
+        enable_controller_debug,
     ])
