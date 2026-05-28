@@ -17,7 +17,7 @@ from launch.actions import (
     DeclareLaunchArgument,
     ExecuteProcess,
     IncludeLaunchDescription,
-    TimerAction,
+    OpaqueFunction,
 )
 from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
@@ -30,6 +30,58 @@ def _default_autonav_repo() -> str:
         "AUTONAV_REPO",
         str(Path.home() / "code/git/AutoNav_25-26"),
     )
+
+
+def _robot_description_candidates(autonav_repo: str) -> list[Path]:
+    candidates = [
+        Path(autonav_repo)
+        / "isaac_ros-dev"
+        / "install"
+        / "bringup"
+        / "share"
+        / "bringup"
+        / "description"
+        / "shogi.urdf",
+        Path(autonav_repo)
+        / "isaac_ros-dev"
+        / "src"
+        / "bringup"
+        / "description"
+        / "shogi.urdf",
+    ]
+    try:
+        candidates.append(
+            Path(get_package_share_directory("bringup"))
+            / "description"
+            / "shogi.urdf"
+        )
+    except Exception:
+        pass
+    return candidates
+
+
+def _load_robot_description(autonav_repo: str) -> str:
+    for model_path in _robot_description_candidates(autonav_repo):
+        if model_path.is_file():
+            return model_path.read_text(encoding="utf-8")
+    searched = "\n  ".join(str(path) for path in _robot_description_candidates(autonav_repo))
+    raise FileNotFoundError(f"Could not find shogi.urdf. Searched:\n  {searched}")
+
+
+def _robot_state_publisher(context, *args, **kwargs):
+    autonav_repo = LaunchConfiguration("autonav_repo").perform(context)
+    return [
+        Node(
+            package="robot_state_publisher",
+            executable="robot_state_publisher",
+            name="robot_state_publisher",
+            output="screen",
+            parameters=[{
+                "robot_description": _load_robot_description(autonav_repo),
+                "use_sim_time": False,
+            }],
+        )
+    ]
 
 
 def generate_launch_description() -> LaunchDescription:
@@ -143,24 +195,6 @@ def generate_launch_description() -> LaunchDescription:
         }.items(),
         condition=IfCondition(launch_nav2),
     )
-    enable_controller_debug = TimerAction(
-        period=8.0,
-        actions=[
-            ExecuteProcess(
-                cmd=[
-                    "ros2",
-                    "param",
-                    "set",
-                    "/controller_server",
-                    "FollowPath.visualize",
-                    "true",
-                ],
-                output="screen",
-                condition=IfCondition(launch_nav2),
-            )
-        ],
-    )
-
     return LaunchDescription([
         DeclareLaunchArgument("autonav_repo", default_value=_default_autonav_repo()),
         DeclareLaunchArgument(
@@ -179,11 +213,11 @@ def generate_launch_description() -> LaunchDescription:
         ),
         DeclareLaunchArgument("launch_nav2", default_value="true"),
         DeclareLaunchArgument("ground_truth_pca", default_value="false"),
+        OpaqueFunction(function=_robot_state_publisher),
         harness_node,
         detection_real_pca,
         detection_ground_truth_pca,
         pca_scan,
         pca_scan_clear,
         nav2,
-        enable_controller_debug,
     ])

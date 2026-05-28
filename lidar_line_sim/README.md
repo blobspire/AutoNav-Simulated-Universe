@@ -61,13 +61,25 @@ cd lidar_line_sim
 ```
 
 For an automated run that records the same topics as the real robot test,
-sends the `2.0 m` forward NavigateToPose goal, and then runs the robot bag
-analysis suite:
+sends the through-gap NavigateToPose goal from `config/lidar_line_course.yaml`,
+and then runs the robot bag analysis suite:
 
 ```bash
 cd lidar_line_sim
 ./Run_LIDAR_LINE_ROS_COURSE_TEST.command
 ```
+
+The default target is beyond the perpendicular tape at the configured 5 ft gap
+centerline, currently `x=2.50 m, y=-0.89 m`. Override it with `GOAL_X` and
+`GOAL_Y` when running diagnostic cases. For example, the old straight-ahead
+goal is an intentionally bad-goal safety test:
+
+```bash
+GOAL_X=2.0 GOAL_Y=0.0 ./Run_LIDAR_LINE_ROS_COURSE_TEST.command
+```
+
+Set `GROUND_TRUTH_PCA=true` to run the same bag-analysis workflow with the
+simulator's ground-truth cone scan instead of the real PCA detector path.
 
 On this Mac/Lima VM setup, launch live RViz through the VM-backed VNC session:
 
@@ -86,12 +98,22 @@ custom `/lidar_line_points` message is not displayed directly; use the debug
 PointCloud2 topic for detected line points.
 
 Set `AUTONAV_REPO=/path/to/AutoNav_25-26` if the checkout is not at
-`~/code/git/AutoNav_25-26`. The launch file starts:
+`~/code/git/AutoNav_25-26`. The launcher defaults to a clean start and stops
+stale course, detector, PCA converter, and Nav2 processes from prior
+interrupted runs. This prevents duplicate publishers from making odom, PCA
+detections, and costmaps appear to jump or smear in RViz. Set
+`AUTONAV_SIM_CLEAN_START=0` only when intentionally running multiple stacks.
+
+The launch file starts:
 
 - `ros_lidar_line_course.py`, which publishes `/cloud_all_fields_fullframe`,
   `/scan_fullframe`, `/map_padded`, `/odom`, `/local_ekf/odom`, TF, and
-  `/autonomous_mode`, then integrates motion from `/cmd_vel` through a
-  conservative latency/deadband/first-order drivetrain model.
+  `/joint_states`, then integrates motion from `/cmd_vel` through a
+  conservative latency/deadband/first-order drivetrain model. The harness owns
+  only `map -> odom -> base_link`; robot child frames come from the URDF.
+- `robot_state_publisher` with the robot `shogi.urdf`, so RViz sees the same
+  base, lidar, caster, camera, GPS, nav-center, and wheel link frames as the
+  robot stack.
 - The real `autonav_detection` grade detector and lidar-line detector.
 - The same PCA PointCloud2-to-LaserScan converters used by the robot.
 - Nav2 using the current robot `nav2_paramsv2.yaml` and BT XML.
@@ -103,8 +125,11 @@ perception.
 The course geometry lives in `config/lidar_line_course.yaml`. It is stored in
 the same lidar-start convention as the robot test doc, then converted to
 Nav2's `nav_center` frame. The perpendicular tape is therefore at
-`x=1.3398 m`, the tape end is at `y=-0.13 m`, the cone's left boundary is at
-`y=-1.654 m`, and the desired gap centerline is near `y=-0.89 m`.
+`x=1.3398 m`, the left lane tape is at `y=+1.524 m` to represent the nominal
+10 ft IGVC lane, the tape end is at `y=-0.13 m`, the cone's left boundary is
+at `y=-1.654 m`, and the desired gap centerline is near `y=-0.89 m`. The
+canonical automated target is farther forward than the tape so success
+requires driving through the gap, not just reaching its entrance.
 
 Simulation failures should be diagnosed from the recorded bag, not just the
 final pose. The test runner records `/lidar_line_points`,

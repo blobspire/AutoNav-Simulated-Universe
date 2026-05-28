@@ -24,6 +24,41 @@ set -u
 
 mkdir -p "$RUN_DIR"
 
+read -r default_goal_x default_goal_y < <(
+  python3 - "$SCRIPT_DIR/config/lidar_line_course.yaml" <<'PY'
+from pathlib import Path
+import sys
+
+
+def parse_scalar(raw):
+    value = raw.split("#", 1)[0].strip()
+    if not value:
+        return ""
+    try:
+        return float(value)
+    except ValueError:
+        return value
+
+
+values = {}
+for line in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#") or ":" not in stripped:
+        continue
+    key, raw = stripped.split(":", 1)
+    values[key.strip()] = parse_scalar(raw)
+
+goal_x = values.get("through_gap_goal_forward_m", values["goal_forward_m"])
+goal_y = values["nominal_centerline_y_m"]
+print(f"{goal_x} {goal_y}")
+PY
+)
+GOAL_X="${GOAL_X:-$default_goal_x}"
+GOAL_Y="${GOAL_Y:-$default_goal_y}"
+GOAL_Z="${GOAL_Z:-0.0}"
+GOAL_YAW_W="${GOAL_YAW_W:-1.0}"
+GROUND_TRUTH_PCA="${GROUND_TRUTH_PCA:-false}"
+
 stop_process() {
   local pid="$1"
   local name="$2"
@@ -82,7 +117,8 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 setsid ros2 launch "$SCRIPT_DIR/ros/lidar_line_course_stack.launch.py" \
-  autonav_repo:="$AUTONAV_REPO" &
+  autonav_repo:="$AUTONAV_REPO" \
+  ground_truth_pca:="$GROUND_TRUTH_PCA" &
 stack_pid=$!
 
 sleep 8
@@ -121,8 +157,9 @@ bag_pid=$!
 
 sleep 6
 
+echo "Sending NavigateToPose goal: x=$GOAL_X y=$GOAL_Y z=$GOAL_Z w=$GOAL_YAW_W ground_truth_pca=$GROUND_TRUTH_PCA"
 ros2 action send_goal /navigate_to_pose nav2_msgs/action/NavigateToPose \
-  "{pose: {header: {frame_id: map}, pose: {position: {x: 2.0, y: 0.0, z: 0.0}, orientation: {w: 1.0}}}}" \
+  "{pose: {header: {frame_id: map}, pose: {position: {x: $GOAL_X, y: $GOAL_Y, z: $GOAL_Z}, orientation: {w: $GOAL_YAW_W}}}}" \
   --feedback | tee "$RUN_DIR/goal.log"
 
 sleep 2

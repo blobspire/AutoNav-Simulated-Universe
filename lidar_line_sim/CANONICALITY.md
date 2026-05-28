@@ -20,6 +20,12 @@ the current Smac Lattice global planner, MPPI local controller, costmaps,
 behavior tree, and recovery behaviors. The harness owns only the synthetic
 world and the robot motion response.
 
+The harness publishes dynamic `map -> odom -> base_link` TF and simulated
+`/joint_states` for the drive wheels. Child frames under `base_link`, including
+the lidar, nav center, caster, GPS, camera, and wheel links, come from the real
+`shogi.urdf` through `robot_state_publisher`. This keeps RViz frame geometry
+matched to the robot stack while still letting the harness control odometry.
+
 The harness now generates LiDAR points as first returns per SICK-style beam.
 Each beam chooses the nearest valid return among:
 
@@ -77,4 +83,14 @@ cd lidar_line_sim
 ```
 
 The runner records the same core topics as the robot test plus MPPI trajectory
-debug topics when available, then runs the AutoNav bag analysis suite.
+debug topics when available, sends the configured through-gap goal, then runs
+the AutoNav bag analysis suite. The default goal is beyond the perpendicular
+tape on the 5 ft gap centerline so a pass proves the executed footprint clears
+the gap. Use `GOAL_X=2.0 GOAL_Y=0.0` only as an intentionally bad straight-goal
+safety diagnostic.
+
+For live RViz work, `Run_LIDAR_LINE_ROS_COURSE.command` defaults to a clean
+start and stops stale course, detector, PCA converter, and Nav2 processes from
+prior interrupted runs. Duplicate ROS stacks publish the same odom/PCA topics
+and can make the cone and costmaps appear to jump or smear. Set
+`AUTONAV_SIM_CLEAN_START=0` only when intentionally running multiple stacks.

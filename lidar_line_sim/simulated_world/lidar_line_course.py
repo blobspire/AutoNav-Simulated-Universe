@@ -99,6 +99,8 @@ def load_lidar_line_course(path: Path | None = None) -> LidarLineCourse:
     cone_left_boundary = _float(values, "cone_left_boundary_y_m")
     cone_center = (perp_x, cone_left_boundary - cone_radius)
 
+    goal_forward = float(values.get("through_gap_goal_forward_m", values["goal_forward_m"]))
+
     return LidarLineCourse(
         tapes=(
             CourseTape(
@@ -123,7 +125,7 @@ def load_lidar_line_course(path: Path | None = None) -> LidarLineCourse:
                 left_boundary_y_m=cone_left_boundary,
             ),
         ),
-        goal=(_float(values, "goal_forward_m"), 0.0),
+        goal=(goal_forward, _float(values, "nominal_centerline_y_m")),
         perp_x_m=perp_x,
         tape_right_y_m=perp_right_y,
         tape_left_y_m=perp_left_y,

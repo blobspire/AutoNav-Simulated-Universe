@@ -27,10 +27,10 @@ try:
     from builtin_interfaces.msg import Time
     from geometry_msgs.msg import TransformStamped, Twist
     from nav_msgs.msg import OccupancyGrid, Odometry
-    from sensor_msgs.msg import LaserScan, PointCloud2, PointField
+    from sensor_msgs.msg import JointState, LaserScan, PointCloud2, PointField
     from sensor_msgs_py import point_cloud2
     from std_msgs.msg import Bool, Header
-    from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
+    from tf2_ros import TransformBroadcaster
 except ImportError as exc:  # pragma: no cover - only used outside ROS shells.
     raise SystemExit(
         "ros_lidar_line_course.py must run in a sourced ROS 2 environment "
@@ -44,6 +44,8 @@ LIDAR_Z_FROM_BASE_LINK_M = 0.20568
 BASE_LINK_HEIGHT_ABOVE_GROUND_M = 0.11303
 GROUND_Z_BASE_M = -BASE_LINK_HEIGHT_ABOVE_GROUND_M
 SENSOR_HEIGHT_M = BASE_LINK_HEIGHT_ABOVE_GROUND_M + LIDAR_Z_FROM_BASE_LINK_M
+WHEEL_TRACK_M = 0.72326
+WHEEL_RADIUS_M = 0.12946
 MULTISCAN_LAYERS = 16
 LIDAR_AZIMUTH_MIN_RAD = -math.pi / 2.0
 LIDAR_AZIMUTH_MAX_RAD = math.pi / 2.0
@@ -65,23 +67,6 @@ CONE_REFLECTOR_RSSI = 50000.0
 def _yaw_quaternion(yaw: float) -> tuple[float, float, float, float]:
     half = 0.5 * yaw
     return 0.0, 0.0, math.sin(half), math.cos(half)
-
-
-def _rpy_quaternion(roll: float,
-                    pitch: float,
-                    yaw: float) -> tuple[float, float, float, float]:
-    cr = math.cos(roll * 0.5)
-    sr = math.sin(roll * 0.5)
-    cp = math.cos(pitch * 0.5)
-    sp = math.sin(pitch * 0.5)
-    cy = math.cos(yaw * 0.5)
-    sy = math.sin(yaw * 0.5)
-    return (
-        sr * cp * cy - cr * sp * sy,
-        cr * sp * cy + sr * cp * sy,
-        cr * cp * sy - sr * sp * cy,
-        cr * cp * cy + sr * sp * sy,
-    )
 
 
 def _stamp_to_float(stamp: Time) -> float:
@@ -138,8 +123,11 @@ class LidarLineCourseHarness(Node):
 
         self.cloud_pub = self.create_publisher(
             PointCloud2, "/cloud_all_fields_fullframe", sensor_qos)
-        self.pca_gt_pub = self.create_publisher(
-            PointCloud2, "/scan_pca_filtered_points", sensor_qos)
+        self.pca_gt_pub = (
+            self.create_publisher(
+                PointCloud2, "/scan_pca_filtered_points", sensor_qos)
+            if self.publish_ground_truth_pca else None
+        )
         self.scan_pub = self.create_publisher(
             LaserScan, "/scan_fullframe", sensor_qos)
         self.map_pub = self.create_publisher(
@@ -147,6 +135,8 @@ class LidarLineCourseHarness(Node):
         self.odom_pub = self.create_publisher(Odometry, "/odom", 10)
         self.local_odom_pub = self.create_publisher(
             Odometry, "/local_ekf/odom", 10)
+        self.joint_state_pub = self.create_publisher(
+            JointState, "/joint_states", 10)
         self.autonomous_pub = self.create_publisher(
             Bool, "/autonomous_mode", 1)
 
@@ -154,8 +144,6 @@ class LidarLineCourseHarness(Node):
             Twist, "/cmd_vel", self._cmd_vel_callback, 10)
 
         self.tf_pub = TransformBroadcaster(self)
-        self.static_tf_pub = StaticTransformBroadcaster(self)
-        self._publish_static_transforms()
 
         self.nav_x = 0.0
         self.nav_y = 0.0
@@ -164,6 +152,8 @@ class LidarLineCourseHarness(Node):
         self.cmd_w = 0.0
         self.applied_v = 0.0
         self.applied_w = 0.0
+        self.left_wheel_position = 0.0
+        self.right_wheel_position = 0.0
         self.pending_commands: list[tuple[float, float, float]] = []
         self.last_cmd_s = -math.inf
         self.last_step_s: float | None = None
@@ -200,25 +190,6 @@ class LidarLineCourseHarness(Node):
                        -MAX_ANGULAR_SPEED_RADPS, MAX_ANGULAR_SPEED_RADPS)
         self.pending_commands.append((now_s + self.cmd_latency_s, cmd_v, cmd_w))
         self.last_cmd_s = now_s
-
-    def _publish_static_transforms(self) -> None:
-        stamp = self.get_clock().now().to_msg()
-        transforms = [
-            self._make_static_transform(
-                stamp, "base_link", "nav_center",
-                BASE_LINK_TO_NAV_CENTER_M, 0.0, 0.0,
-                *_yaw_quaternion(0.0)),
-            self._make_static_transform(
-                stamp, "base_link", "base_footprint",
-                0.0, 0.0, -BASE_LINK_HEIGHT_ABOVE_GROUND_M,
-                *_yaw_quaternion(0.0)),
-            self._make_static_transform(
-                stamp, "base_link", "lidar_footprint",
-                LIDAR_X_FROM_BASE_LINK_M, 0.000105,
-                LIDAR_Z_FROM_BASE_LINK_M,
-                *_rpy_quaternion(-math.pi, 0.0, 0.0)),
-        ]
-        self.static_tf_pub.sendTransform(transforms)
 
     @staticmethod
     def _make_static_transform(stamp: Time,
@@ -557,7 +528,7 @@ class LidarLineCourseHarness(Node):
         stamp = self.get_clock().now().to_msg()
         cloud_points = self._build_cloud_points()
         self.cloud_pub.publish(self._make_cloud(stamp, cloud_points))
-        if self.publish_ground_truth_pca:
+        if self.pca_gt_pub is not None:
             self.pca_gt_pub.publish(
                 self._make_cloud(stamp, self._pca_ground_truth_points()))
         self._publish_scan_fullframe(stamp, cloud_points)
@@ -596,9 +567,30 @@ class LidarLineCourseHarness(Node):
             math.sin(self.heading + self.applied_w * dt),
             math.cos(self.heading + self.applied_w * dt),
         )
+        self._integrate_wheel_joints(dt, self.applied_v, self.applied_w)
         self._publish_dynamic_transforms(now)
         self._publish_odom(now, self.applied_v, self.applied_w)
+        self._publish_joint_states(now)
         self.autonomous_pub.publish(Bool(data=True))
+
+    def _integrate_wheel_joints(self, dt: float, v: float, w: float) -> None:
+        left_linear = v - w * WHEEL_TRACK_M * 0.5
+        right_linear = v + w * WHEEL_TRACK_M * 0.5
+        self.left_wheel_position += left_linear / WHEEL_RADIUS_M * dt
+        self.right_wheel_position += right_linear / WHEEL_RADIUS_M * dt
+
+    def _publish_joint_states(self, stamp: Time) -> None:
+        msg = JointState()
+        msg.header.stamp = stamp
+        msg.name = ["Left_Wheel", "Right_Wheel"]
+        msg.position = [self.left_wheel_position, self.right_wheel_position]
+        msg.velocity = [
+            (self.applied_v - self.applied_w * WHEEL_TRACK_M * 0.5)
+            / WHEEL_RADIUS_M,
+            (self.applied_v + self.applied_w * WHEEL_TRACK_M * 0.5)
+            / WHEEL_RADIUS_M,
+        ]
+        self.joint_state_pub.publish(msg)
 
     @staticmethod
     def _first_order_response(current: float,
