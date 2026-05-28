@@ -30,6 +30,7 @@ from pathlib import Path
 import numpy as np
 
 from lidar_line_course import load_lidar_line_course
+from lidar_ray_model import raycast_cylindrical_cones
 
 
 # AutoNav_25-26 path_following_two source of truth:
@@ -983,28 +984,27 @@ def distance_to_cones(points_xy: np.ndarray,
 def sample_pca_obstacle_points(world: World,
                                pose: RobotPose,
                                spacing_m: float = 0.06) -> np.ndarray:
-    points: list[tuple[float, float, float]] = []
+    _ = spacing_m
     if not world.cone_obstacles:
         return np.zeros((0, 3), dtype=np.float32)
-    c_heading = math.cos(pose.heading)
-    s_heading = math.sin(pose.heading)
-    for cone in world.cone_obstacles:
-        rel = cone.center - np.array([pose.x, pose.y], dtype=float)
-        local_x = c_heading * rel[0] + s_heading * rel[1]
-        local_y = -s_heading * rel[0] + c_heading * rel[1]
-        if local_x < -0.25 or local_x > 6.0 or abs(local_y) > 3.0:
-            continue
-        circumference = 2.0 * math.pi * cone.radius_m
-        samples = max(12, int(math.ceil(circumference / spacing_m)))
-        z_samples = max(3, int(math.ceil(cone.height_m / 0.20)))
-        for i in range(samples):
-            theta = 2.0 * math.pi * i / samples
-            x = float(cone.center[0] + cone.radius_m * math.cos(theta))
-            y = float(cone.center[1] + cone.radius_m * math.sin(theta))
-            for zi in range(z_samples):
-                z = 0.08 + zi * (cone.height_m - 0.08) / max(1, z_samples - 1)
-                points.append((x, y, z))
-    return np.asarray(points, dtype=np.float32)
+    hits = raycast_cylindrical_cones(
+        world.cone_obstacles,
+        pose.lidar_origin(),
+        pose.heading,
+        SENSOR_HEIGHT_M,
+        LIDAR_AZIMUTH_MIN_RAD,
+        LIDAR_AZIMUTH_MAX_RAD,
+        math.radians(LIDAR_HORIZONTAL_RES_DEG),
+        math.radians(LIDAR_HARDWARE_ELEVATION_MIN_DEG),
+        math.radians(LIDAR_HARDWARE_ELEVATION_MAX_DEG),
+        MULTISCAN_LAYERS,
+        0.20,
+        DEFAULT_MAX_RANGE_M,
+    )
+    if not hits:
+        return np.zeros((0, 3), dtype=np.float32)
+    return np.asarray([(hit.x, hit.y, hit.z) for hit in hits],
+                      dtype=np.float32)
 
 
 def deterministic_noise(points_xy: np.ndarray,

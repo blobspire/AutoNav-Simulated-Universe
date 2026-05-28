@@ -17,6 +17,7 @@ from pathlib import Path
 import numpy as np
 
 from lidar_line_course import load_lidar_line_course
+from lidar_ray_model import cone_occludes_point, raycast_cylindrical_cones
 
 try:
     import rclpy
@@ -42,6 +43,13 @@ LIDAR_X_FROM_BASE_LINK_M = 0.6598
 LIDAR_Z_FROM_BASE_LINK_M = 0.20568
 BASE_LINK_HEIGHT_ABOVE_GROUND_M = 0.11303
 GROUND_Z_BASE_M = -BASE_LINK_HEIGHT_ABOVE_GROUND_M
+SENSOR_HEIGHT_M = BASE_LINK_HEIGHT_ABOVE_GROUND_M + LIDAR_Z_FROM_BASE_LINK_M
+MULTISCAN_LAYERS = 16
+LIDAR_AZIMUTH_MIN_RAD = -math.pi / 2.0
+LIDAR_AZIMUTH_MAX_RAD = math.pi / 2.0
+LIDAR_HARDWARE_ELEVATION_MIN_RAD = math.radians(-35.0)
+LIDAR_HARDWARE_ELEVATION_MAX_RAD = math.radians(7.5)
+LIDAR_HORIZONTAL_RES_RAD = math.radians(0.5)
 
 MAX_LINEAR_SPEED_MPS = 0.25
 MAX_ANGULAR_SPEED_RADPS = 0.65
@@ -218,6 +226,15 @@ class LidarLineCourseHarness(Node):
             self.nav_y - BASE_LINK_TO_NAV_CENTER_M * s,
         )
 
+    def _lidar_origin_world(self) -> tuple[float, float]:
+        bx, by = self._base_pose_world()
+        c = math.cos(self.heading)
+        s = math.sin(self.heading)
+        return (
+            bx + LIDAR_X_FROM_BASE_LINK_M * c,
+            by + LIDAR_X_FROM_BASE_LINK_M * s,
+        )
+
     def _world_to_base(self,
                        x: float,
                        y: float,
@@ -293,6 +310,33 @@ class LidarLineCourseHarness(Node):
             best = min(best, dist)
         return best
 
+    def _cone_occludes_point(self,
+                             x: float,
+                             y: float,
+                             z_above_ground: float) -> bool:
+        return cone_occludes_point(
+            self.course.cones,
+            self._lidar_origin_world(),
+            SENSOR_HEIGHT_M,
+            (x, y, z_above_ground),
+        )
+
+    def _raycast_cone_hits(self):
+        return raycast_cylindrical_cones(
+            self.course.cones,
+            self._lidar_origin_world(),
+            self.heading,
+            SENSOR_HEIGHT_M,
+            LIDAR_AZIMUTH_MIN_RAD,
+            LIDAR_AZIMUTH_MAX_RAD,
+            LIDAR_HORIZONTAL_RES_RAD,
+            LIDAR_HARDWARE_ELEVATION_MIN_RAD,
+            LIDAR_HARDWARE_ELEVATION_MAX_RAD,
+            MULTISCAN_LAYERS,
+            0.20,
+            8.5,
+        )
+
     def _build_cloud_points(self) -> list[tuple[float, float, float, float,
                                                float, float, float, float]]:
         points: list[tuple[float, float, float, float,
@@ -302,6 +346,8 @@ class LidarLineCourseHarness(Node):
         for x in floor_x:
             for y in floor_y:
                 if not self._world_in_front_arc(float(x), float(y)):
+                    continue
+                if self._cone_occludes_point(float(x), float(y), 0.0):
                     continue
                 on_tape = self._tape_distance(float(x), float(y)) <= 0.06
                 self._append_cloud_point(
@@ -320,29 +366,19 @@ class LidarLineCourseHarness(Node):
                 x = ax + (bx - ax) * float(t)
                 y = ay + (by - ay) * float(t)
                 if self._world_in_front_arc(x, y):
+                    if self._cone_occludes_point(x, y, 0.0):
+                        continue
                     self._append_cloud_point(
                         points, x, y, 0.0, 52000.0, True, layer=0)
 
-        for cone in self.course.cones:
-            circumference = 2.0 * math.pi * cone.radius_m
-            ring_samples = max(
-                12, int(math.ceil(circumference / self.cone_spacing_m)))
-            z_samples = max(4, int(math.ceil(cone.height_m / 0.18)))
-            for i in range(ring_samples):
-                theta = 2.0 * math.pi * i / ring_samples
-                x = cone.center[0] + cone.radius_m * math.cos(theta)
-                y = cone.center[1] + cone.radius_m * math.sin(theta)
-                if not self._world_in_front_arc(x, y):
-                    continue
-                for zi in range(z_samples):
-                    z = 0.08 + zi * (cone.height_m - 0.08) / max(1, z_samples - 1)
-                    reflector = z > 0.28
-                    self._append_cloud_point(
-                        points, x, y, z,
-                        50000.0 if reflector else 33000.0,
-                        reflector,
-                        layer=4,
-                    )
+        for hit in self._raycast_cone_hits():
+            reflector = hit.z > 0.28
+            self._append_cloud_point(
+                points, hit.x, hit.y, hit.z,
+                50000.0 if reflector else 33000.0,
+                reflector,
+                layer=hit.layer,
+            )
         return points
 
     def _make_cloud(self,
@@ -375,17 +411,10 @@ class LidarLineCourseHarness(Node):
                                                      float, float]]:
         points: list[tuple[float, float, float, float,
                            float, float, float, float]] = []
-        for cone in self.course.cones:
-            samples = max(
-                12, int(math.ceil(2.0 * math.pi * cone.radius_m
-                                  / self.cone_spacing_m)))
-            for i in range(samples):
-                theta = 2.0 * math.pi * i / samples
-                x = cone.center[0] + cone.radius_m * math.cos(theta)
-                y = cone.center[1] + cone.radius_m * math.sin(theta)
-                if self._world_in_front_arc(x, y):
-                    self._append_cloud_point(
-                        points, x, y, 0.25, 33000.0, False, layer=4)
+        for hit in self._raycast_cone_hits():
+            self._append_cloud_point(
+                points, hit.x, hit.y, hit.z, 33000.0, False,
+                layer=hit.layer)
         return points
 
     def _publish_scan_fullframe(self,

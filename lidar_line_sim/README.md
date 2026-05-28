@@ -18,7 +18,10 @@ multiScan165, 16 layers, 0.5 degree native horizontal spacing, 10 m LiDAR
 range, front 180 degrees around robot +x, and the upside-down robot-frame
 vertical FOV of -35 to +7.5 degrees. The physical sensor can publish a full
 360 degree cloud, but the robot's local planning/detection pipeline clamps to
-the forward half-space for this behavior.
+the forward half-space for this behavior. Cone returns are modeled as
+first-return intersections against finite vertical cone cylinders, so the
+synthetic cloud only includes the visible cone surface and suppresses floor or
+tape points hidden behind the cone.
 
 ## Run
 
