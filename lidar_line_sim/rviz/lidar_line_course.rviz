@@ -7,6 +7,7 @@ Panels:
         - /Global Options1
         - /Status1
         - /Global Costmap1
+        - /Robot Footprint1
         - /Plans1
         - /Perception1
       Splitter Ratio: 0.5
@@ -139,6 +140,18 @@ Visualization Manager:
         Value: ""
       Use Timestamp: false
       Value: false
+    - Alpha: 1
+      Class: rviz_default_plugins/Polygon
+      Color: 255; 255; 255
+      Enabled: true
+      Name: Robot Footprint
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /local_costmap/published_footprint
+      Value: true
     - Class: rviz_common/Group
       Displays:
         - Alpha: 1
