@@ -3,6 +3,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AUTONAV_REPO="${AUTONAV_REPO:-$HOME/code/git/AutoNav_25-26}"
+SCENARIO="${SCENARIO:-canonical_5ft_gap}"
+COURSE_CONFIG="${COURSE_CONFIG:-}"
 
 cleanup_pattern() {
   local pattern="$1"
@@ -54,5 +56,12 @@ if [[ "${AUTONAV_SIM_CLEAN_START:-1}" != "0" ]]; then
   cleanup_stale_stack
 fi
 
-ros2 launch "$SCRIPT_DIR/ros/lidar_line_course_stack.launch.py" \
+launch_args=(
   autonav_repo:="$AUTONAV_REPO"
+  scenario:="$SCENARIO"
+)
+if [[ -n "$COURSE_CONFIG" ]]; then
+  launch_args+=(course_config:="$COURSE_CONFIG")
+fi
+
+ros2 launch "$SCRIPT_DIR/ros/lidar_line_course_stack.launch.py" "${launch_args[@]}"

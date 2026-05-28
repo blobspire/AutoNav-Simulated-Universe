@@ -87,9 +87,9 @@ def _robot_state_publisher(context, *args, **kwargs):
 def generate_launch_description() -> LaunchDescription:
     sim_root = Path(__file__).resolve().parents[1]
     harness = sim_root / "simulated_world" / "ros_lidar_line_course.py"
-    course_config = sim_root / "config" / "lidar_line_course.yaml"
-
     autonav_repo = LaunchConfiguration("autonav_repo")
+    scenario = LaunchConfiguration("scenario")
+    course_config = LaunchConfiguration("course_config")
     nav2_params = LaunchConfiguration("nav2_params")
     bt_xml = LaunchConfiguration("bt_xml")
     launch_nav2 = LaunchConfiguration("launch_nav2")
@@ -112,7 +112,9 @@ def generate_launch_description() -> LaunchDescription:
             str(harness),
             "--ros-args",
             "-p",
-            f"course_config:={course_config}",
+            ["scenario:=", scenario],
+            "-p",
+            ["course_config:=", course_config],
             "-p",
             ["publish_ground_truth_pca:=", ground_truth_pca],
         ],
@@ -197,6 +199,8 @@ def generate_launch_description() -> LaunchDescription:
     )
     return LaunchDescription([
         DeclareLaunchArgument("autonav_repo", default_value=_default_autonav_repo()),
+        DeclareLaunchArgument("scenario", default_value="canonical_5ft_gap"),
+        DeclareLaunchArgument("course_config", default_value="__auto__"),
         DeclareLaunchArgument(
             "nav2_params",
             default_value=[

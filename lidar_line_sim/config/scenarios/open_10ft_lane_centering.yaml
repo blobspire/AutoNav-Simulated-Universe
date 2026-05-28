@@ -1,0 +1,36 @@
+scenario_id: open_10ft_lane_centering
+description: "Open 10 ft lane; robot should prefer the center instead of line-hugging"
+
+lidar_x_from_nav_center_m: 0.4348
+tape_width_m: 0.12
+
+start_x_m: 0.0
+start_y_m: 0.0
+start_yaw_rad: 0.0
+goal_x_m: 3.20
+goal_y_m: 0.0
+goal_yaw_rad: 0.0
+
+tape_count: 2
+tape_0_name: left_boundary
+tape_0_start_x_m: -0.25
+tape_0_start_y_m: 1.524
+tape_0_end_x_m: 4.20
+tape_0_end_y_m: 1.524
+tape_1_name: right_boundary
+tape_1_start_x_m: -0.25
+tape_1_start_y_m: -1.524
+tape_1_end_x_m: 4.20
+tape_1_end_y_m: -1.524
+
+cone_count: 0
+
+analysis_station_count: 2
+analysis_station_0_label: early_centering
+analysis_station_0_x_m: 1.50
+analysis_station_0_y_min_m: -0.35
+analysis_station_0_y_max_m: 0.35
+analysis_station_1_label: late_centering
+analysis_station_1_x_m: 2.60
+analysis_station_1_y_min_m: -0.35
+analysis_station_1_y_max_m: 0.35

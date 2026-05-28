@@ -86,8 +86,21 @@ The runner records the same core topics as the robot test plus MPPI trajectory
 debug topics when available, sends the configured through-gap goal, then runs
 the AutoNav bag analysis suite. The default goal is beyond the perpendicular
 tape on the 5 ft gap centerline so a pass proves the executed footprint clears
-the gap. Use `GOAL_X=2.0 GOAL_Y=0.0` only as an intentionally bad straight-goal
-safety diagnostic.
+the gap.
+
+Use the deterministic regression suite to check that tuning has not overfit
+the canonical course:
+
+```bash
+cd lidar_line_sim
+./Run_LIDAR_LINE_ROS_COURSE_SUITE.command
+```
+
+The suite excludes no-route/bad-goal and dashed-line scenarios by design, but
+it includes open-lane, center-obstacle, edge-obstacle, narrow-decoy-gap,
+internal-line, curved-lane, and pose-offset cases. Scenario-specific geometry
+checks and padded clearance start as diagnostics unless
+`STRICT_SCENARIO_GEOMETRY=1` is set.
 
 For live RViz work, `Run_LIDAR_LINE_ROS_COURSE.command` defaults to a clean
 start and stops stale course, detector, PCA converter, and Nav2 processes from

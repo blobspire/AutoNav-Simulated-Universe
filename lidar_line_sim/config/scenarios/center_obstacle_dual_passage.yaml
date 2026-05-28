@@ -1,0 +1,33 @@
+scenario_id: center_obstacle_dual_passage
+description: "20 ft lane with a centered cone; either side is a legal passage"
+
+lidar_x_from_nav_center_m: 0.4348
+tape_width_m: 0.12
+cone_radius_m: 0.23
+cone_height_m: 0.70
+
+start_x_m: 0.0
+start_y_m: 0.0
+start_yaw_rad: 0.0
+goal_x_m: 3.60
+goal_y_m: 0.0
+goal_yaw_rad: 0.0
+
+tape_count: 2
+tape_0_name: left_boundary
+tape_0_start_x_m: -0.25
+tape_0_start_y_m: 3.048
+tape_0_end_x_m: 4.40
+tape_0_end_y_m: 3.048
+tape_1_name: right_boundary
+tape_1_start_x_m: -0.25
+tape_1_start_y_m: -3.048
+tape_1_end_x_m: 4.40
+tape_1_end_y_m: -3.048
+
+cone_count: 1
+cone_0_name: center_cone
+cone_0_center_x_m: 1.70
+cone_0_center_y_m: 0.0
+
+analysis_station_count: 0

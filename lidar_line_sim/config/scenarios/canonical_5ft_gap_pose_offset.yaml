@@ -1,0 +1,43 @@
+scenario_id: canonical_5ft_gap_pose_offset
+description: "Canonical 5 ft gap with a deterministic start y/yaw offset"
+
+lidar_x_from_nav_center_m: 0.4348
+tape_width_m: 0.12
+cone_radius_m: 0.23
+cone_height_m: 0.70
+
+start_x_m: 0.0
+start_y_m: 0.12
+start_yaw_rad: 0.0872665
+goal_x_m: 2.50
+goal_y_m: -0.89
+goal_yaw_rad: 0.0
+
+tape_count: 2
+tape_0_name: left_tape
+tape_0_start_x_m: -0.225
+tape_0_start_y_m: 1.524
+tape_0_end_x_m: 2.975
+tape_0_end_y_m: 1.524
+tape_1_name: perpendicular_tape
+tape_1_start_x_m: 1.340
+tape_1_start_y_m: 1.524
+tape_1_end_x_m: 1.340
+tape_1_end_y_m: -0.13
+
+cone_count: 1
+cone_0_name: dot_cone
+cone_0_center_x_m: 1.340
+cone_0_center_y_m: -1.884
+
+analysis_perp_x_m: 1.340
+analysis_tape_right_y_m: -0.13
+analysis_tape_left_y_m: 1.524
+analysis_required_tape_side_y_m: -0.57
+analysis_required_cone_side_y_m: -1.21
+analysis_nominal_centerline_y_m: -0.89
+analysis_station_count: 1
+analysis_station_0_label: through_5ft_gap
+analysis_station_0_x_m: 1.340
+analysis_station_0_y_min_m: -1.21
+analysis_station_0_y_max_m: -0.57

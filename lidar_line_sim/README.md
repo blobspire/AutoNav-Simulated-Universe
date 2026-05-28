@@ -61,25 +61,48 @@ cd lidar_line_sim
 ```
 
 For an automated run that records the same topics as the real robot test,
-sends the through-gap NavigateToPose goal from `config/lidar_line_course.yaml`,
-and then runs the robot bag analysis suite:
+sends the selected scenario's NavigateToPose goal, and then runs the robot bag
+analysis suite:
 
 ```bash
 cd lidar_line_sim
 ./Run_LIDAR_LINE_ROS_COURSE_TEST.command
 ```
 
-The default target is beyond the perpendicular tape at the configured 5 ft gap
-centerline, currently `x=2.50 m, y=-0.89 m`. Override it with `GOAL_X` and
-`GOAL_Y` when running diagnostic cases. For example, the old straight-ahead
-goal is an intentionally bad-goal safety test:
+The default scenario is `canonical_5ft_gap`, whose target is beyond the
+perpendicular tape at the configured 5 ft gap centerline, currently
+`x=2.50 m, y=-0.89 m`. Run another deterministic regression scenario with
+`SCENARIO`:
 
 ```bash
-GOAL_X=2.0 GOAL_Y=0.0 ./Run_LIDAR_LINE_ROS_COURSE_TEST.command
+SCENARIO=open_10ft_lane_centering ./Run_LIDAR_LINE_ROS_COURSE_TEST.command
 ```
 
 Set `GROUND_TRUTH_PCA=true` to run the same bag-analysis workflow with the
 simulator's ground-truth cone scan instead of the real PCA detector path.
+
+Run the deterministic multi-scenario suite with:
+
+```bash
+./Run_LIDAR_LINE_ROS_COURSE_SUITE.command
+```
+
+The suite currently includes:
+
+- `canonical_5ft_gap`
+- `open_10ft_lane_centering`
+- `center_obstacle_dual_passage`
+- `edge_obstacle_single_5ft_route`
+- `narrow_decoy_gap_plus_legal_gap`
+- `internal_line_no_cross`
+- `minimum_turn_radius_curve`
+- `canonical_5ft_gap_pose_offset`
+
+The suite intentionally does not include a no-route/bad-goal scenario or a
+dashed-line scenario. Use `STRICT_SCENARIO_GEOMETRY=1` to promote padded
+clearance and scenario-specific station diagnostics to failures once baselines
+are accepted. Set `GOAL_TIMEOUT`, `STARTUP_WAIT_SEC`, `PRE_GOAL_WAIT_SEC`, or
+`SCENARIO_SETTLE_SEC` when a slower VM needs different timing.
 
 On this Mac/Lima VM setup, launch live RViz through the VM-backed VNC session:
 
@@ -122,14 +145,15 @@ The harness defaults to the real grade/PCA detector path. Launch with
 `ground_truth_pca:=true` only when isolating Nav2/costmap behavior from PCA
 perception.
 
-The course geometry lives in `config/lidar_line_course.yaml`. It is stored in
-the same lidar-start convention as the robot test doc, then converted to
-Nav2's `nav_center` frame. The perpendicular tape is therefore at
-`x=1.3398 m`, the left lane tape is at `y=+1.524 m` to represent the nominal
-10 ft IGVC lane, the tape end is at `y=-0.13 m`, the cone's left boundary is
-at `y=-1.654 m`, and the desired gap centerline is near `y=-0.89 m`. The
-canonical automated target is farther forward than the tape so success
-requires driving through the gap, not just reaching its entrance.
+Scenario geometry lives in `config/scenarios/*.yaml` using Nav2 `map` /
+`nav_center` coordinates. The legacy `config/lidar_line_course.yaml` remains
+for compatibility with the physical course document's lidar-start convention.
+The canonical scenario's perpendicular tape is at `x=1.34 m`, the left lane
+tape is at `y=+1.524 m` to represent the nominal 10 ft IGVC lane, the tape end
+is at `y=-0.13 m`, the cone's left boundary is at `y=-1.654 m`, and the
+desired gap centerline is near `y=-0.89 m`. The canonical automated target is
+farther forward than the tape so success requires driving through the gap, not
+just reaching its entrance.
 
 Simulation failures should be diagnosed from the recorded bag, not just the
 final pose. The test runner records `/lidar_line_points`,

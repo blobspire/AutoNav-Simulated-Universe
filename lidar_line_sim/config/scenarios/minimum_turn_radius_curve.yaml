@@ -1,0 +1,76 @@
+scenario_id: minimum_turn_radius_curve
+description: "Curved lane approximated by short tape segments"
+
+lidar_x_from_nav_center_m: 0.4348
+tape_width_m: 0.12
+
+start_x_m: 0.0
+start_y_m: 0.0
+start_yaw_rad: 0.0
+goal_x_m: 4.20
+goal_y_m: -0.35
+goal_yaw_rad: 0.0
+
+tape_count: 10
+tape_0_name: left_curve_0
+tape_0_start_x_m: -0.20
+tape_0_start_y_m: 1.524
+tape_0_end_x_m: 0.80
+tape_0_end_y_m: 1.874
+tape_1_name: left_curve_1
+tape_1_start_x_m: 0.80
+tape_1_start_y_m: 1.874
+tape_1_end_x_m: 1.80
+tape_1_end_y_m: 2.174
+tape_2_name: left_curve_2
+tape_2_start_x_m: 1.80
+tape_2_start_y_m: 2.174
+tape_2_end_x_m: 2.80
+tape_2_end_y_m: 1.824
+tape_3_name: left_curve_3
+tape_3_start_x_m: 2.80
+tape_3_start_y_m: 1.824
+tape_3_end_x_m: 3.80
+tape_3_end_y_m: 1.274
+tape_4_name: left_curve_4
+tape_4_start_x_m: 3.80
+tape_4_start_y_m: 1.274
+tape_4_end_x_m: 4.60
+tape_4_end_y_m: 1.074
+tape_5_name: right_curve_0
+tape_5_start_x_m: -0.20
+tape_5_start_y_m: -1.524
+tape_5_end_x_m: 0.80
+tape_5_end_y_m: -1.174
+tape_6_name: right_curve_1
+tape_6_start_x_m: 0.80
+tape_6_start_y_m: -1.174
+tape_6_end_x_m: 1.80
+tape_6_end_y_m: -0.874
+tape_7_name: right_curve_2
+tape_7_start_x_m: 1.80
+tape_7_start_y_m: -0.874
+tape_7_end_x_m: 2.80
+tape_7_end_y_m: -1.224
+tape_8_name: right_curve_3
+tape_8_start_x_m: 2.80
+tape_8_start_y_m: -1.224
+tape_8_end_x_m: 3.80
+tape_8_end_y_m: -1.774
+tape_9_name: right_curve_4
+tape_9_start_x_m: 3.80
+tape_9_start_y_m: -1.774
+tape_9_end_x_m: 4.60
+tape_9_end_y_m: -1.974
+
+cone_count: 0
+
+analysis_station_count: 2
+analysis_station_0_label: first_curve_band
+analysis_station_0_x_m: 1.20
+analysis_station_0_y_min_m: -0.30
+analysis_station_0_y_max_m: 0.95
+analysis_station_1_label: second_curve_band
+analysis_station_1_x_m: 3.40
+analysis_station_1_y_min_m: -0.85
+analysis_station_1_y_max_m: 0.45

@@ -16,11 +16,12 @@ from pathlib import Path
 
 import numpy as np
 
-from lidar_line_course import load_lidar_line_course
+from lidar_line_course import DEFAULT_SCENARIO_ID, load_lidar_line_course
 from lidar_ray_model import raycast_cylindrical_cones
 
 try:
     import rclpy
+    from rclpy._rclpy_pybind11 import RCLError
     from rclpy.executors import ExternalShutdownException
     from rclpy.node import Node
     from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
@@ -82,9 +83,9 @@ class LidarLineCourseHarness(Node):
         super().__init__("lidar_line_course_harness")
         self.declare_parameter(
             "course_config",
-            str(Path(__file__).resolve().parents[1]
-                / "config" / "lidar_line_course.yaml"),
+            "",
         )
+        self.declare_parameter("scenario", DEFAULT_SCENARIO_ID)
         self.declare_parameter("publish_ground_truth_pca", False)
         self.declare_parameter("cloud_rate_hz", 10.0)
         self.declare_parameter("odom_rate_hz", 50.0)
@@ -100,9 +101,14 @@ class LidarLineCourseHarness(Node):
         self.declare_parameter("linear_deadband_mps", 0.02)
         self.declare_parameter("angular_deadband_radps", 0.04)
 
-        course_path = Path(
-            str(self.get_parameter("course_config").value)).expanduser()
-        self.course = load_lidar_line_course(course_path)
+        course_path = str(self.get_parameter("course_config").value).strip()
+        if course_path == "__auto__":
+            course_path = ""
+        scenario = str(self.get_parameter("scenario").value).strip()
+        self.course = load_lidar_line_course(
+            Path(course_path).expanduser() if course_path else None,
+            scenario_id=scenario,
+        )
         self.publish_ground_truth_pca = bool(
             self.get_parameter("publish_ground_truth_pca").value)
         self.cmd_latency_s = max(
@@ -145,9 +151,9 @@ class LidarLineCourseHarness(Node):
 
         self.tf_pub = TransformBroadcaster(self)
 
-        self.nav_x = 0.0
-        self.nav_y = 0.0
-        self.heading = 0.0
+        self.nav_x = self.course.start[0]
+        self.nav_y = self.course.start[1]
+        self.heading = self.course.start[2]
         self.cmd_v = 0.0
         self.cmd_w = 0.0
         self.applied_v = 0.0
@@ -170,14 +176,19 @@ class LidarLineCourseHarness(Node):
         self._publish_map()
 
         self.get_logger().info(
-            "Loaded lidar-line course: perp_x=%.3f tape_y=[%.2f, %.2f] "
-            "goal=(%.2f, %.2f) publish_ground_truth_pca=%s"
+            "Loaded lidar-line scenario '%s': start=(%.2f, %.2f, %.1fdeg) "
+            "goal=(%.2f, %.2f) tapes=%d cones=%d config=%s "
+            "publish_ground_truth_pca=%s"
             % (
-                self.course.perp_x_m,
-                self.course.tape_right_y_m,
-                self.course.tape_left_y_m,
+                self.course.scenario_id,
+                self.course.start[0],
+                self.course.start[1],
+                math.degrees(self.course.start[2]),
                 self.course.goal[0],
                 self.course.goal[1],
+                len(self.course.tapes),
+                len(self.course.cones),
+                self.course.config_path,
                 self.publish_ground_truth_pca,
             )
         )
@@ -638,13 +649,32 @@ class LidarLineCourseHarness(Node):
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = "map"
         msg.info.resolution = 0.05
-        msg.info.width = 160
-        msg.info.height = 160
-        msg.info.origin.position.x = -3.0
-        msg.info.origin.position.y = -4.0
+        min_x, min_y, max_x, max_y = self._map_bounds(msg.info.resolution)
+        msg.info.width = int(math.ceil((max_x - min_x) / msg.info.resolution))
+        msg.info.height = int(math.ceil((max_y - min_y) / msg.info.resolution))
+        msg.info.origin.position.x = min_x
+        msg.info.origin.position.y = min_y
         msg.info.origin.orientation.w = 1.0
         msg.data = [0] * (msg.info.width * msg.info.height)
         self.map_pub.publish(msg)
+
+    def _map_bounds(self, resolution: float) -> tuple[float, float, float, float]:
+        xs = [self.course.start[0], self.course.goal[0], -3.0, 5.0]
+        ys = [self.course.start[1], self.course.goal[1], -4.0, 4.0]
+        for tape in self.course.tapes:
+            xs.extend((tape.start[0], tape.end[0]))
+            ys.extend((tape.start[1], tape.end[1]))
+        for cone in self.course.cones:
+            xs.extend((cone.center[0] - cone.radius_m,
+                       cone.center[0] + cone.radius_m))
+            ys.extend((cone.center[1] - cone.radius_m,
+                       cone.center[1] + cone.radius_m))
+        margin = 2.0
+        min_x = math.floor((min(xs) - margin) / resolution) * resolution
+        min_y = math.floor((min(ys) - margin) / resolution) * resolution
+        max_x = math.ceil((max(xs) + margin) / resolution) * resolution
+        max_y = math.ceil((max(ys) + margin) / resolution) * resolution
+        return min_x, min_y, max_x, max_y
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -652,6 +682,9 @@ def main(argv: list[str] | None = None) -> int:
     node = LidarLineCourseHarness()
     try:
         rclpy.spin(node)
+    except RCLError:
+        if rclpy.ok():
+            raise
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:

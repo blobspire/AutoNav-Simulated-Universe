@@ -3,7 +3,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AUTONAV_REPO="${AUTONAV_REPO:-$HOME/code/git/AutoNav_25-26}"
-RUN_DIR="${RUN_DIR:-$SCRIPT_DIR/ros_course_runs/$(date +%Y%m%d_%H%M%S)}"
+SCENARIO="${SCENARIO:-canonical_5ft_gap}"
+COURSE_CONFIG="${COURSE_CONFIG:-}"
+RUN_DIR="${RUN_DIR:-$SCRIPT_DIR/ros_course_runs/${SCENARIO}_$(date +%Y%m%d_%H%M%S)}"
 
 if [[ ! -f /opt/ros/humble/setup.bash ]]; then
   echo "ROS Humble setup not found at /opt/ros/humble/setup.bash" >&2
@@ -24,40 +26,39 @@ set -u
 
 mkdir -p "$RUN_DIR"
 
-read -r default_goal_x default_goal_y < <(
-  python3 - "$SCRIPT_DIR/config/lidar_line_course.yaml" <<'PY'
+read -r default_goal_x default_goal_y default_goal_qz default_goal_qw resolved_course_config scenario_id < <(
+  python3 - "$SCRIPT_DIR" "$SCENARIO" "$COURSE_CONFIG" <<'PY'
+import math
 from pathlib import Path
 import sys
 
+script_dir = Path(sys.argv[1])
+scenario = sys.argv[2]
+course_config = sys.argv[3].strip()
+sys.path.insert(0, str(script_dir / "simulated_world"))
+from lidar_line_course import load_lidar_line_course  # noqa: E402
 
-def parse_scalar(raw):
-    value = raw.split("#", 1)[0].strip()
-    if not value:
-        return ""
-    try:
-        return float(value)
-    except ValueError:
-        return value
-
-
-values = {}
-for line in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
-    stripped = line.strip()
-    if not stripped or stripped.startswith("#") or ":" not in stripped:
-        continue
-    key, raw = stripped.split(":", 1)
-    values[key.strip()] = parse_scalar(raw)
-
-goal_x = values.get("through_gap_goal_forward_m", values["goal_forward_m"])
-goal_y = values["nominal_centerline_y_m"]
-print(f"{goal_x} {goal_y}")
+course = load_lidar_line_course(course_config or None, scenario_id=scenario)
+half = 0.5 * course.goal_yaw_rad
+print(
+    f"{course.goal[0]} {course.goal[1]} {math.sin(half)} "
+    f"{math.cos(half)} {course.config_path} {course.scenario_id}"
+)
 PY
 )
 GOAL_X="${GOAL_X:-$default_goal_x}"
 GOAL_Y="${GOAL_Y:-$default_goal_y}"
 GOAL_Z="${GOAL_Z:-0.0}"
-GOAL_YAW_W="${GOAL_YAW_W:-1.0}"
+GOAL_QZ="${GOAL_QZ:-$default_goal_qz}"
+GOAL_YAW_W="${GOAL_YAW_W:-$default_goal_qw}"
 GROUND_TRUTH_PCA="${GROUND_TRUTH_PCA:-false}"
+STRICT_SCENARIO_GEOMETRY="${STRICT_SCENARIO_GEOMETRY:-0}"
+GOAL_TIMEOUT="${GOAL_TIMEOUT:-${GOAL_TIMEOUT_SEC:-180s}}"
+STARTUP_WAIT_SEC="${STARTUP_WAIT_SEC:-8}"
+PRE_GOAL_WAIT_SEC="${PRE_GOAL_WAIT_SEC:-6}"
+if [[ "$GOAL_TIMEOUT" =~ ^[0-9]+$ ]]; then
+  GOAL_TIMEOUT="${GOAL_TIMEOUT}s"
+fi
 
 stop_process() {
   local pid="$1"
@@ -116,15 +117,23 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-setsid ros2 launch "$SCRIPT_DIR/ros/lidar_line_course_stack.launch.py" \
-  autonav_repo:="$AUTONAV_REPO" \
-  ground_truth_pca:="$GROUND_TRUTH_PCA" &
+launch_args=(
+  autonav_repo:="$AUTONAV_REPO"
+  scenario:="$SCENARIO"
+  ground_truth_pca:="$GROUND_TRUTH_PCA"
+)
+if [[ -n "$COURSE_CONFIG" ]]; then
+  launch_args+=(course_config:="$COURSE_CONFIG")
+fi
+
+setsid ros2 launch "$SCRIPT_DIR/ros/lidar_line_course_stack.launch.py" "${launch_args[@]}" &
 stack_pid=$!
 
-sleep 8
+sleep "$STARTUP_WAIT_SEC"
 
 ros2 bag record --include-hidden-topics \
   -o "$RUN_DIR/bag" \
+  /rosout \
   /tf \
   /tf_static \
   /local_ekf/odom \
@@ -155,22 +164,44 @@ ros2 bag record --include-hidden-topics \
   /compute_path_to_pose/_action/status &
 bag_pid=$!
 
-sleep 6
+sleep "$PRE_GOAL_WAIT_SEC"
 
-echo "Sending NavigateToPose goal: x=$GOAL_X y=$GOAL_Y z=$GOAL_Z w=$GOAL_YAW_W ground_truth_pca=$GROUND_TRUTH_PCA"
-ros2 action send_goal /navigate_to_pose nav2_msgs/action/NavigateToPose \
-  "{pose: {header: {frame_id: map}, pose: {position: {x: $GOAL_X, y: $GOAL_Y, z: $GOAL_Z}, orientation: {w: $GOAL_YAW_W}}}}" \
+echo "Sending NavigateToPose goal: scenario=$scenario_id x=$GOAL_X y=$GOAL_Y z=$GOAL_Z qz=$GOAL_QZ w=$GOAL_YAW_W ground_truth_pca=$GROUND_TRUTH_PCA timeout=$GOAL_TIMEOUT"
+goal_status=0
+set +e
+timeout --foreground "$GOAL_TIMEOUT" ros2 action send_goal /navigate_to_pose nav2_msgs/action/NavigateToPose \
+  "{pose: {header: {frame_id: map}, pose: {position: {x: $GOAL_X, y: $GOAL_Y, z: $GOAL_Z}, orientation: {z: $GOAL_QZ, w: $GOAL_YAW_W}}}}" \
   --feedback | tee "$RUN_DIR/goal.log"
+goal_status="${PIPESTATUS[0]}"
+set -e
+if [[ "$goal_status" -eq 124 ]]; then
+  echo "NavigateToPose goal command timed out after $GOAL_TIMEOUT" | tee -a "$RUN_DIR/goal.log"
+elif [[ "$goal_status" -ne 0 ]]; then
+  echo "NavigateToPose goal command exited with status $goal_status" | tee -a "$RUN_DIR/goal.log"
+fi
 
 sleep 2
 cleanup
 set -e
 trap - EXIT INT TERM
 
+analysis_status=0
 if [[ -x "$AUTONAV_REPO/scripts/run_lidar_line_bag_analysis.sh" ]]; then
-  "$AUTONAV_REPO/scripts/run_lidar_line_bag_analysis.sh" "$RUN_DIR/bag" \
+  analysis_args=(--scenario-config "$resolved_course_config")
+  if [[ "$STRICT_SCENARIO_GEOMETRY" == "1" ]]; then
+    analysis_args+=(--strict-scenario-geometry)
+  fi
+  set +e
+  "$AUTONAV_REPO/scripts/run_lidar_line_bag_analysis.sh" "$RUN_DIR/bag" "${analysis_args[@]}" \
     | tee "$RUN_DIR/analysis.log"
+  analysis_status="${PIPESTATUS[0]}"
+  set -e
 else
   echo "Bag saved at $RUN_DIR/bag"
   echo "Analysis script not executable: $AUTONAV_REPO/scripts/run_lidar_line_bag_analysis.sh"
 fi
+
+if [[ "$goal_status" -ne 0 ]]; then
+  exit "$goal_status"
+fi
+exit "$analysis_status"
