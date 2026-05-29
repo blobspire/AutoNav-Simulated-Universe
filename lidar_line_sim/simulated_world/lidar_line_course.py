@@ -31,6 +31,15 @@ class CourseCone:
 
 
 @dataclass(frozen=True)
+class CourseWall:
+    name: str
+    start: tuple[float, float]
+    end: tuple[float, float]
+    height_m: float
+    thickness_m: float
+
+
+@dataclass(frozen=True)
 class AnalysisStation:
     label: str
     x_m: float
@@ -44,6 +53,7 @@ class LidarLineCourse:
     description: str
     tapes: tuple[CourseTape, ...]
     cones: tuple[CourseCone, ...]
+    walls: tuple[CourseWall, ...]
     start: tuple[float, float, float]
     goal: tuple[float, float]
     goal_yaw_rad: float
@@ -55,6 +65,7 @@ class LidarLineCourse:
     required_cone_side_y_m: float | None
     nominal_centerline_y_m: float | None
     lidar_x_from_nav_center_m: float
+    static_walls_in_map: bool
     config_path: Path
 
 
@@ -128,6 +139,15 @@ def _str(values: dict[str, object], key: str, default: str = "") -> str:
     return str(values.get(key, default))
 
 
+def _bool(values: dict[str, object], key: str, default: bool = False) -> bool:
+    value = values.get(key, default)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+
 def _optional_float(values: dict[str, object], key: str) -> float | None:
     if key not in values or values[key] == "":
         return None
@@ -176,6 +196,30 @@ def _load_indexed_cones(values: dict[str, object]) -> tuple[CourseCone, ...]:
                 values, f"{prefix}left_boundary_y_m", center[1] + radius),
         ))
     return tuple(cones)
+
+
+def _load_indexed_walls(values: dict[str, object]) -> tuple[CourseWall, ...]:
+    count = _int(values, "wall_count")
+    default_height = _float(values, "wall_height_m", 1.0)
+    default_thickness = _float(values, "wall_thickness_m", 0.08)
+    walls: list[CourseWall] = []
+    for idx in range(count):
+        prefix = f"wall_{idx}_"
+        walls.append(CourseWall(
+            name=_str(values, f"{prefix}name", f"wall_{idx}"),
+            start=(
+                _float(values, f"{prefix}start_x_m"),
+                _float(values, f"{prefix}start_y_m"),
+            ),
+            end=(
+                _float(values, f"{prefix}end_x_m"),
+                _float(values, f"{prefix}end_y_m"),
+            ),
+            height_m=_float(values, f"{prefix}height_m", default_height),
+            thickness_m=_float(
+                values, f"{prefix}thickness_m", default_thickness),
+        ))
+    return tuple(walls)
 
 
 def _load_analysis_stations(
@@ -243,6 +287,7 @@ def _load_legacy_course(values: dict[str, object],
                 left_boundary_y_m=cone_left_boundary,
             ),
         ),
+        walls=(),
         start=(0.0, 0.0, 0.0),
         goal=(goal_forward, nominal_y),
         goal_yaw_rad=0.0,
@@ -263,6 +308,7 @@ def _load_legacy_course(values: dict[str, object],
             values, "required_centerline_cone_side_y_m"),
         nominal_centerline_y_m=nominal_y,
         lidar_x_from_nav_center_m=lidar_x_from_nav,
+        static_walls_in_map=True,
         config_path=config_path,
     )
 
@@ -284,6 +330,7 @@ def load_lidar_line_course(path: Path | str | None = None,
         description=_str(values, "description", scenario),
         tapes=_load_indexed_tapes(values),
         cones=_load_indexed_cones(values),
+        walls=_load_indexed_walls(values),
         start=(
             _float(values, "start_x_m", 0.0),
             _float(values, "start_y_m", 0.0),
@@ -309,5 +356,6 @@ def load_lidar_line_course(path: Path | str | None = None,
         ),
         lidar_x_from_nav_center_m=_float(
             values, "lidar_x_from_nav_center_m", 0.4348),
+        static_walls_in_map=_bool(values, "static_walls_in_map", True),
         config_path=config_path,
     )

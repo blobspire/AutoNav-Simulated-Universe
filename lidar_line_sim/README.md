@@ -97,6 +97,8 @@ The suite currently includes:
 - `internal_line_no_cross`
 - `minimum_turn_radius_curve`
 - `canonical_5ft_gap_pose_offset`
+- `driveway_test`
+- `driveway_1in_wall_gap_repro`
 
 The suite intentionally does not include a no-route/bad-goal scenario or a
 dashed-line scenario. Use `STRICT_SCENARIO_GEOMETRY=1` to promote padded
@@ -146,8 +148,13 @@ The harness defaults to the real grade/PCA detector path. Launch with
 perception.
 
 Scenario geometry lives in `config/scenarios/*.yaml` using Nav2 `map` /
-`nav_center` coordinates. The legacy `config/lidar_line_course.yaml` remains
-for compatibility with the physical course document's lidar-start convention.
+`nav_center` coordinates. Scenarios can define retroreflective tape, cylindrical
+obstacles, and vertical wall segments. Set `static_walls_in_map: false` on a
+scenario to keep walls in simulated LiDAR/PCA returns without stamping them
+directly into `/map_padded`; this is useful for testing global obstacle-memory
+mirroring. The legacy
+`config/lidar_line_course.yaml` remains for compatibility with the physical
+course document's lidar-start convention.
 The canonical scenario's perpendicular tape is at `x=1.34 m`, the left lane
 tape is at `y=+1.524 m` to represent the nominal 10 ft IGVC lane, the tape end
 is at `y=-0.13 m`, the cone's left boundary is at `y=-1.654 m`, and the

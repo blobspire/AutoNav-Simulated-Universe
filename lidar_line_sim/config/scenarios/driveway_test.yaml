@@ -1,0 +1,68 @@
+scenario_id: driveway_test
+description: "12 m driveway with right/back walls, left tape, diagonal trap tape, obstacle, and 6 ft legal route"
+
+lidar_x_from_nav_center_m: 0.4348
+tape_width_m: 0.12
+cone_radius_m: 0.23
+cone_height_m: 0.70
+wall_height_m: 1.00
+wall_thickness_m: 0.08
+
+# Driveway coordinates:
+#   x = forward down the 12 m driveway
+#   y = left/right across the driveway
+#   right wall at y=-1.0
+#
+# The measured course has a 6 ft legal route to the left of the obstacle.
+# With the obstacle at y=0.550 and radius=0.23, the left tape center is set
+# to y=2.6688 so obstacle-edge to tape-edge clearance is 1.8288 m.
+# The diagonal trap tape stops 1 ft away from the right wall to exercise the
+# observed false route between the wall lethal zone and line lethal zone.
+start_x_m: 1.00
+start_y_m: 0.00
+start_yaw_rad: 0.0
+goal_x_m: 11.20
+goal_y_m: 1.40
+goal_yaw_rad: 0.0
+
+tape_count: 2
+tape_0_name: left_driveway_line
+tape_0_start_x_m: 0.00
+tape_0_start_y_m: 2.6688
+tape_0_end_x_m: 12.00
+tape_0_end_y_m: 2.6688
+tape_1_name: diagonal_45_trap_tape
+tape_1_start_x_m: 7.623
+tape_1_start_y_m: -0.6952
+tape_1_end_x_m: 9.037
+tape_1_end_y_m: 0.7188
+
+cone_count: 1
+cone_0_name: trap_gap_obstacle
+# Cone center is 3 ft from the diagonal tape endpoint, keeping the direct
+# tape-to-obstacle opening as the trap gap. Its forward edge is 6 ft before
+# the driveway end at x=12.0.
+cone_0_center_x_m: 9.941
+cone_0_center_y_m: 0.550
+
+wall_count: 2
+wall_0_name: right_driveway_wall
+wall_0_start_x_m: 0.00
+wall_0_start_y_m: -1.00
+wall_0_end_x_m: 12.00
+wall_0_end_y_m: -1.00
+wall_1_name: back_driveway_wall
+wall_1_start_x_m: 0.00
+wall_1_start_y_m: -1.00
+wall_1_end_x_m: 0.00
+wall_1_end_y_m: 2.6688
+
+analysis_station_count: 2
+analysis_station_0_label: around_diagonal_tape_left_side
+analysis_station_0_x_m: 9.04
+analysis_station_0_y_min_m: 0.95
+analysis_station_0_y_max_m: 2.10
+analysis_station_1_label: left_of_trap_gap_obstacle
+analysis_station_1_x_m: 9.94
+analysis_station_1_y_min_m: 1.20
+analysis_station_1_y_max_m: 2.10

@@ -20,6 +20,8 @@ DEFAULT_SCENARIOS=(
   internal_line_no_cross
   minimum_turn_radius_curve
   canonical_5ft_gap_pose_offset
+  driveway_test
+  driveway_1in_wall_gap_repro
 )
 
 if [[ -n "${SCENARIOS:-}" ]]; then

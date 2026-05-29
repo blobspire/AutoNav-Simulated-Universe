@@ -63,6 +63,7 @@ FLOOR_RSSI = 30000.0
 TAPE_RSSI = 52000.0
 CONE_RSSI = 33000.0
 CONE_REFLECTOR_RSSI = 50000.0
+WALL_RSSI = 36000.0
 
 
 def _yaw_quaternion(yaw: float) -> tuple[float, float, float, float]:
@@ -177,8 +178,8 @@ class LidarLineCourseHarness(Node):
 
         self.get_logger().info(
             "Loaded lidar-line scenario '%s': start=(%.2f, %.2f, %.1fdeg) "
-            "goal=(%.2f, %.2f) tapes=%d cones=%d config=%s "
-            "publish_ground_truth_pca=%s"
+            "goal=(%.2f, %.2f) tapes=%d cones=%d walls=%d config=%s "
+            "publish_ground_truth_pca=%s static_walls_in_map=%s"
             % (
                 self.course.scenario_id,
                 self.course.start[0],
@@ -188,8 +189,10 @@ class LidarLineCourseHarness(Node):
                 self.course.goal[1],
                 len(self.course.tapes),
                 len(self.course.cones),
+                len(self.course.walls),
                 self.course.config_path,
                 self.publish_ground_truth_pca,
+                self.course.static_walls_in_map,
             )
         )
 
@@ -339,6 +342,95 @@ class LidarLineCourseHarness(Node):
             RANGE_MAX_M,
         )
 
+    @staticmethod
+    def _cross_2d(a: tuple[float, float], b: tuple[float, float]) -> float:
+        return a[0] * b[1] - a[1] * b[0]
+
+    @classmethod
+    def _ray_segment_distance(cls,
+                              origin: tuple[float, float],
+                              direction: tuple[float, float],
+                              start: tuple[float, float],
+                              end: tuple[float, float]) -> float | None:
+        sx = end[0] - start[0]
+        sy = end[1] - start[1]
+        denom = cls._cross_2d(direction, (sx, sy))
+        if abs(denom) <= 1e-9:
+            return None
+        qmp = (start[0] - origin[0], start[1] - origin[1])
+        distance = cls._cross_2d(qmp, (sx, sy)) / denom
+        segment_t = cls._cross_2d(qmp, direction) / denom
+        if distance < 0.0 or segment_t < 0.0 or segment_t > 1.0:
+            return None
+        return distance
+
+    def _raycast_wall_beam(self,
+                           origin: tuple[float, float],
+                           direction: tuple[float, float],
+                           elevation: float,
+                           cos_elevation: float) -> tuple[float, float, float,
+                                                           float] | None:
+        tan_elevation = math.tan(elevation)
+        best: tuple[float, float, float, float] | None = None
+        best_range = math.inf
+        for wall in self.course.walls:
+            horizontal_distance = self._ray_segment_distance(
+                origin, direction, wall.start, wall.end)
+            if horizontal_distance is None:
+                continue
+            range_m = horizontal_distance / cos_elevation
+            if range_m < RANGE_MIN_M or range_m > RANGE_MAX_M:
+                continue
+            z = SENSOR_HEIGHT_M + horizontal_distance * tan_elevation
+            if z < 0.0 or z > wall.height_m:
+                continue
+            if range_m < best_range:
+                best_range = range_m
+                best = (
+                    origin[0] + horizontal_distance * direction[0],
+                    origin[1] + horizontal_distance * direction[1],
+                    z,
+                    range_m,
+                )
+        return best
+
+    def _raycast_wall_hits(self) -> list[tuple[float, float, float, int]]:
+        hits: list[tuple[float, float, float, int]] = []
+        if not self.course.walls:
+            return hits
+
+        azimuth_count = (
+            int(math.floor((LIDAR_AZIMUTH_MAX_RAD - LIDAR_AZIMUTH_MIN_RAD)
+                           / LIDAR_HORIZONTAL_RES_RAD))
+            + 1
+        )
+        origin = self._lidar_origin_world()
+        for layer in range(MULTISCAN_LAYERS):
+            if MULTISCAN_LAYERS == 1:
+                elevation = 0.5 * (
+                    LIDAR_HARDWARE_ELEVATION_MIN_RAD
+                    + LIDAR_HARDWARE_ELEVATION_MAX_RAD)
+            else:
+                frac = layer / float(MULTISCAN_LAYERS - 1)
+                elevation = LIDAR_HARDWARE_ELEVATION_MIN_RAD + (
+                    LIDAR_HARDWARE_ELEVATION_MAX_RAD
+                    - LIDAR_HARDWARE_ELEVATION_MIN_RAD) * frac
+            cos_elevation = math.cos(elevation)
+            if cos_elevation <= 1e-6:
+                continue
+            for azimuth_idx in range(azimuth_count):
+                azimuth = LIDAR_AZIMUTH_MIN_RAD + (
+                    LIDAR_HORIZONTAL_RES_RAD * azimuth_idx)
+                if azimuth > LIDAR_AZIMUTH_MAX_RAD + 1e-9:
+                    continue
+                world_angle = self.heading + azimuth
+                direction = (math.cos(world_angle), math.sin(world_angle))
+                hit = self._raycast_wall_beam(
+                    origin, direction, elevation, cos_elevation)
+                if hit is not None:
+                    hits.append((hit[0], hit[1], hit[2], layer))
+        return hits
+
     def _build_cloud_points(self) -> list[tuple[float, float, float, float,
                                                float, float, float, float]]:
         """Generate first-return synthetic LiDAR points.
@@ -398,17 +490,34 @@ class LidarLineCourseHarness(Node):
                         reflector,
                     )
 
+                world_angle = self.heading + azimuth
+                direction = (math.cos(world_angle), math.sin(world_angle))
+                wall_hit = self._raycast_wall_beam(
+                    (origin_x, origin_y),
+                    direction,
+                    elevation,
+                    cos_elevation,
+                )
+                if wall_hit is not None and wall_hit[3] < best_range:
+                    best_range = wall_hit[3]
+                    best = (
+                        wall_hit[0],
+                        wall_hit[1],
+                        wall_hit[2],
+                        WALL_RSSI,
+                        False,
+                    )
+
                 if tan_elevation < -1e-6:
                     horizontal_distance = -SENSOR_HEIGHT_M / tan_elevation
                     floor_range = horizontal_distance / cos_elevation
                     if RANGE_MIN_M <= floor_range <= RANGE_MAX_M:
-                        world_angle = self.heading + azimuth
                         floor_x = (
                             origin_x + horizontal_distance
-                            * math.cos(world_angle))
+                            * direction[0])
                         floor_y = (
                             origin_y + horizontal_distance
-                            * math.sin(world_angle))
+                            * direction[1])
                         if floor_range < best_range:
                             on_tape = self._point_on_tape(floor_x, floor_y)
                             best_range = floor_range
@@ -507,6 +616,9 @@ class LidarLineCourseHarness(Node):
             # tape; reflector state is deliberately false on this debug path.
             self._append_cloud_point(points, hit.x, hit.y, hit.z, CONE_RSSI,
                                      False, layer=hit.layer)
+        for x, y, z, layer in self._raycast_wall_hits():
+            self._append_cloud_point(points, x, y, z, WALL_RSSI, False,
+                                     layer=layer)
         return points
 
     def _publish_scan_fullframe(self,
@@ -656,7 +768,28 @@ class LidarLineCourseHarness(Node):
         msg.info.origin.position.y = min_y
         msg.info.origin.orientation.w = 1.0
         msg.data = [0] * (msg.info.width * msg.info.height)
+        if self.course.static_walls_in_map:
+            self._mark_static_walls(msg, min_x, min_y)
         self.map_pub.publish(msg)
+
+    def _mark_static_walls(self,
+                           msg: OccupancyGrid,
+                           origin_x: float,
+                           origin_y: float) -> None:
+        if not self.course.walls:
+            return
+        resolution = msg.info.resolution
+        for iy in range(msg.info.height):
+            y = origin_y + (iy + 0.5) * resolution
+            for ix in range(msg.info.width):
+                x = origin_x + (ix + 0.5) * resolution
+                for wall in self.course.walls:
+                    if self._point_segment_distance(
+                            x, y, wall.start, wall.end) <= (
+                                0.5 * wall.thickness_m
+                                + 0.5 * resolution):
+                        msg.data[iy * msg.info.width + ix] = 100
+                        break
 
     def _map_bounds(self, resolution: float) -> tuple[float, float, float, float]:
         xs = [self.course.start[0], self.course.goal[0], -3.0, 5.0]
@@ -669,12 +802,35 @@ class LidarLineCourseHarness(Node):
                        cone.center[0] + cone.radius_m))
             ys.extend((cone.center[1] - cone.radius_m,
                        cone.center[1] + cone.radius_m))
+        for wall in self.course.walls:
+            half = 0.5 * wall.thickness_m
+            xs.extend((wall.start[0] - half, wall.start[0] + half,
+                       wall.end[0] - half, wall.end[0] + half))
+            ys.extend((wall.start[1] - half, wall.start[1] + half,
+                       wall.end[1] - half, wall.end[1] + half))
         margin = 2.0
         min_x = math.floor((min(xs) - margin) / resolution) * resolution
         min_y = math.floor((min(ys) - margin) / resolution) * resolution
         max_x = math.ceil((max(xs) + margin) / resolution) * resolution
         max_y = math.ceil((max(ys) + margin) / resolution) * resolution
         return min_x, min_y, max_x, max_y
+
+    @staticmethod
+    def _point_segment_distance(x: float,
+                                y: float,
+                                start: tuple[float, float],
+                                end: tuple[float, float]) -> float:
+        ax, ay = start
+        bx, by = end
+        abx = bx - ax
+        aby = by - ay
+        denom = abx * abx + aby * aby
+        if denom <= 1e-12:
+            return math.hypot(x - ax, y - ay)
+        t = max(0.0, min(1.0, ((x - ax) * abx + (y - ay) * aby) / denom))
+        qx = ax + t * abx
+        qy = ay + t * aby
+        return math.hypot(x - qx, y - qy)
 
 
 def main(argv: list[str] | None = None) -> int:
