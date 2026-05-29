@@ -38,10 +38,10 @@ from lidar_ray_model import raycast_cylindrical_cones
 #     base_footprint is 0.113030 m below base_link
 #     lidar_footprint is 0.205680 m above base_link
 #     nav_center is 0.225 m forward of base_link
-#   slam/config/nav2_paramsv2.yaml:
+#   slam/config/nav2_params_lidar.yaml:
 #     Nav2 plans/controllers use robot_base_frame: nav_center
 #     footprint: +/-0.545 m x +/-0.410 m in nav_center
-#     local footprint_padding: 0.03 m
+#     local footprint_padding: 0.05 m
 BASE_LINK_HEIGHT_ABOVE_GROUND_M = 0.113030
 LIDAR_Z_FROM_BASE_LINK_M = 0.205680
 SENSOR_HEIGHT_M = BASE_LINK_HEIGHT_ABOVE_GROUND_M + LIDAR_Z_FROM_BASE_LINK_M
@@ -72,7 +72,7 @@ FIELD_Y_MAX = 6.4
 GRID_RES_M = 0.10
 ROBOT_FOOTPRINT_HALF_LENGTH_M = 0.545
 ROBOT_FOOTPRINT_HALF_WIDTH_M = 0.410
-LOCAL_FOOTPRINT_PADDING_M = 0.030
+LOCAL_FOOTPRINT_PADDING_M = 0.050
 DEFAULT_TAPE_WIDTH_M = 0.12
 ROBOT_FOOTPRINT_RADIUS_M = math.hypot(
     ROBOT_FOOTPRINT_HALF_LENGTH_M,
@@ -93,7 +93,7 @@ LINE_SOFT_INFLATION_M = 0.80
 PCA_OBSTACLE_INFLATION_M = 0.85
 
 # Robot dynamics: differential-drive command limits come from
-# the active AutoNav_25-26 nav2_paramsv2.yaml. The physics integrator
+# the active AutoNav_25-26 nav2_params_lidar.yaml. The physics integrator
 # still uses the simple nonholonomic body model from the Behavior Tree sim, but
 # all controller limits, footprint checks, and recovery behavior below are tied
 # to the real robot branch.
@@ -713,18 +713,18 @@ def resolve_nav2_config_path(value: str) -> Path:
     if value == "auto":
         candidates = (
             Path.home() / "code/git/AutoNav_25-26/isaac_ros-dev/src/"
-            "slam/config/nav2_paramsv2.yaml",
+            "slam/config/nav2_params_lidar.yaml",
             Path.home() / "code/git/AutoNavB/isaac_ros-dev/src/"
-            "slam/config/nav2_paramsv2.yaml",
+            "slam/config/nav2_params_lidar.yaml",
             Path.home() / "code/git/AutoNav/isaac_ros-dev/src/"
-            "slam/config/nav2_paramsv2.yaml",
+            "slam/config/nav2_params_lidar.yaml",
         )
         for candidate in candidates:
             if candidate.exists():
                 return candidate
         checked = "\n".join(f"  {candidate}" for candidate in candidates)
         raise FileNotFoundError(
-            "Could not find robot nav2_paramsv2.yaml. Checked:\n"
+            "Could not find robot nav2_params_lidar.yaml. Checked:\n"
             f"{checked}")
 
     path = Path(value).expanduser()
@@ -3147,7 +3147,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                               "'auto' or omit PATH to search ~/code/git."))
     parser.add_argument("--nav2-config", nargs="?", const="auto", default="",
                         metavar="PATH",
-                        help=("Load robot nav2_paramsv2.yaml lidar_line_layer. "
+                        help=("Load robot nav2_params_lidar.yaml lidar_line_layer. "
                               "Use 'auto' or omit PATH to search ~/code/git."))
     parser.add_argument("--robot-benchmark", action="store_true",
                         help=("Run benchmark with --robot-config auto and "

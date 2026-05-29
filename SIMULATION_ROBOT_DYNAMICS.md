@@ -38,7 +38,7 @@ Core dimensions and physical values:
 
 The kinematic limits and behavior source of truth is:
 
-- `AutoNav_25-26/isaac_ros-dev/src/slam/config/nav2_paramsv2.yaml`
+- `AutoNav_25-26/isaac_ros-dev/src/slam/config/nav2_params_lidar.yaml`
 - `AutoNav_25-26/isaac_ros-dev/src/slam/behavior_trees/bt_nav.xml`
 - `AutoNav_25-26/isaac_ros-dev/src/bringup/description/shogi.urdf`
 

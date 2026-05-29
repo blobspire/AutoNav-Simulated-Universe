@@ -205,7 +205,7 @@ def generate_launch_description() -> LaunchDescription:
             "nav2_params",
             default_value=[
                 autonav_repo,
-                "/isaac_ros-dev/src/slam/config/nav2_paramsv2.yaml",
+                "/isaac_ros-dev/src/slam/config/nav2_params_lidar.yaml",
             ],
         ),
         DeclareLaunchArgument(

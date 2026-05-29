@@ -4,7 +4,7 @@
 
 ## Problem
 
-The current `nav2_paramsv2.yaml` uses an `ObstacleLayer` subscribing to `/scan_fullframe` (LaserScan) with a height band filter. This works on flat ground but breaks on ramps:
+The current `nav2_params_lidar.yaml` uses an `ObstacleLayer` subscribing to `/scan_fullframe` (LaserScan) with a height band filter. This works on flat ground but breaks on ramps:
 
 - **On a ramp the robot tilts.** Ground appears at the wrong height and is misclassified.
 - **We cannot just widen the height band.** It lets ground through or misses cones.
@@ -178,7 +178,7 @@ Replace `obstacle_layer` with a custom `slope_layer` Nav2 costmap plugin that cl
 ```
 isaac_ros-dev/src/
 ├── slam/config/
-│   └── nav2_paramsv2.yaml          ← MODIFY: swap obstacle_layer → slope_layer
+│   └── nav2_params_lidar.yaml          ← MODIFY: swap obstacle_layer → slope_layer
 ├── line_layer/                      ← KEEP (painted-line detection)
 ├── slope_layer/                     ← NEW PACKAGE
 │   ├── include/slope_layer/
@@ -193,7 +193,7 @@ isaac_ros-dev/src/
 
 ### Current Config (obstacle_layer)
 ```yaml
-# nav2_paramsv2.yaml — BEFORE
+# nav2_params_lidar.yaml — BEFORE
 obstacle_layer:
   plugin: "nav2_costmap_2d::ObstacleLayer"
   enabled: True
@@ -207,7 +207,7 @@ obstacle_layer:
 
 ### New Config (slope_layer)
 ```yaml
-# nav2_paramsv2.yaml — AFTER
+# nav2_params_lidar.yaml — AFTER
 slope_layer:
   plugin: "slope_layer::SlopeLayer"
   enabled: True
@@ -501,11 +501,11 @@ These were learned the hard way during simulator validation. None of them requir
 
 ## Tunable Hyperparameters (slope_layer deployment)
 
-These five knobs are the field-tunable surface area of the deployed perception pipeline. They live in the `slope_layer` block of `nav2_paramsv2.yaml` and are read by the C++ plugin via the standard Nav2 `declareParameter` flow at activation time — no recompile to retune. The simulator mirrors the same five keys so any value validated in simulation maps 1:1 onto the robot.
+These five knobs are the field-tunable surface area of the deployed perception pipeline. They live in the `slope_layer` block of `nav2_params_lidar.yaml` and are read by the C++ plugin via the standard Nav2 `declareParameter` flow at activation time — no recompile to retune. The simulator mirrors the same five keys so any value validated in simulation maps 1:1 onto the robot.
 
 **Defaults are the simulator-validated values (15 / 15 agents pass at 15 / 20 / 30 % grade thresholds).** Each comment names the knob, what tightening it costs you, what loosening it costs you, and a working range — so anyone editing the file knows the trade before they save.
 
-### YAML schema (drop into `slope_layer:` block of `nav2_paramsv2.yaml`)
+### YAML schema (drop into `slope_layer:` block of `nav2_params_lidar.yaml`)
 
 ```yaml
 # ── Ground / wall split (Step 2) ─────────────────────────────────────────────
@@ -571,7 +571,7 @@ node->get_parameter(name_ + "." + "spike_min_elevated", spike_min_elevated_);
 node->get_parameter(name_ + "." + "min_cluster_size",   min_cluster_size_);
 ```
 
-Defaults in the `declareParameter` calls match the simulator-validated values, so a plugin built before `nav2_paramsv2.yaml` is updated still ships correct behavior.
+Defaults in the `declareParameter` calls match the simulator-validated values, so a plugin built before `nav2_params_lidar.yaml` is updated still ships correct behavior.
 
 ### Simulator parity loader
 
@@ -679,7 +679,7 @@ This is the preferred deployment path on `fix/behavior-tree-triggering`. Instead
                            ▼
 ┌─────────────────────────────────────────────────────────────┐
 │  nav2_costmap_2d::ObstacleLayer                             │
-│  slam/config/nav2_paramsv2.yaml (local + global, identical) │
+│  slam/config/nav2_params_lidar.yaml (local + global, identical) │
 │    observation_sources: scan                                 │
 │    scan.topic: /scan_fullframe                               │
 │    scan.data_type: LaserScan                                 │
@@ -733,7 +733,7 @@ TF chain: `map → odom → base_link → lidar_footprint`
 └─────────────────────────────────────────────────────────────┘
 ```
 
-Driver, TF tree, Nav2 plugin set, package count, and topic names from `line_detector` are all unchanged. The only edits are (a) the rename, (b) adding the second executable, (c) one line in `nav2_paramsv2.yaml` per costmap, (d) one button row in the GUI.
+Driver, TF tree, Nav2 plugin set, package count, and topic names from `line_detector` are all unchanged. The only edits are (a) the rename, (b) adding the second executable, (c) one line in `nav2_params_lidar.yaml` per costmap, (d) one button row in the GUI.
 
 ### Package layout
 
@@ -815,7 +815,7 @@ Parameters (reuse the slope_layer YAML defaults validated in simulation —
 ### Costmap config patch
 
 ```yaml
-# slam/config/nav2_paramsv2.yaml — replace the existing scan source
+# slam/config/nav2_params_lidar.yaml — replace the existing scan source
 # Apply identically to BOTH the local and global costmap obstacle_layer blocks.
 obstacle_layer:
   plugin: "nav2_costmap_2d::ObstacleLayer"
@@ -869,7 +869,7 @@ ros2 launch autonav_detection detection.launch.py
 5. Rebuild → run `t002_Line_Comp.launch.py` to confirm `/line_detection/lines` still publishes (proves the topic name didn't break).
 6. Add `src/grade/pca_node.cpp` + `src/grade/pca_pipeline.cpp` (port from `lidar_sim_gui.py:build_grade_costmap` + Steps 1–5 of slope_layer above).
 7. Add `launch/detection.launch.py` and `config/run-detect.sh`.
-8. Patch `nav2_paramsv2.yaml` (both costmaps) to subscribe to `/scan_pca_filtered_points`.
+8. Patch `nav2_params_lidar.yaml` (both costmaps) to subscribe to `/scan_pca_filtered_points`.
 9. Patch `hud_node.py` ("LINE DETECT" → "DETECT", add `"PCA GRADE"` virtual name).
 
 Steps 1–5 land separately from steps 6–9: the codebase is fully runnable after step 5 with zero behavior change. The PCA detector arrives in steps 6–9 as one cohesive change.

@@ -136,7 +136,7 @@ KP_LIN, KD_LIN      = 35.0, 8.0
 KP_ANG, KD_ANG      = 22.0, 4.0
 
 
-# ── Behavior-tree thresholds (mirror nav2_paramsv2.yaml progress_checker etc.) ──
+# ── Behavior-tree thresholds (mirror nav2_params_lidar.yaml progress_checker etc.) ──
 PROGRESS_STALL_SEC  = 4.0           # no 0.10 m progress in 4 s → BACKUP
 PROGRESS_DIST_M     = 0.10
 PATH_BEHIND_PERSIST_SEC = 0.4       # "path behind body" must hold this long

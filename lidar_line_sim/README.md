@@ -141,7 +141,7 @@ The launch file starts:
   robot stack.
 - The real `autonav_detection` grade detector and lidar-line detector.
 - The same PCA PointCloud2-to-LaserScan converters used by the robot.
-- Nav2 using the current robot `nav2_paramsv2.yaml` and BT XML.
+- Nav2 using the current robot `nav2_params_lidar.yaml` and BT XML.
 
 The harness defaults to the real grade/PCA detector path. Launch with
 `ground_truth_pca:=true` only when isolating Nav2/costmap behavior from PCA
@@ -227,7 +227,7 @@ precision, timing, and whether the planned path stays clear of tape.
 `--robot-config` loads the real ROS 2 `lidar_line_detector.yaml` and applies
 the candidate mode, reflector gate, fallback adaptive RSSI thresholds, cluster
 filters, voxel output size, and max output point count in the sim.
-`--nav2-config` loads the real ROS 2 `nav2_paramsv2.yaml` and applies the
+`--nav2-config` loads the real ROS 2 `nav2_params_lidar.yaml` and applies the
 `lidar_line_layer` persistence values. `--robot-benchmark` is shorthand for
 `--benchmark --robot-config auto --nav2-config auto`, where `auto` searches
 the common local AutoNav checkout paths under `~/code/git` and prefers
